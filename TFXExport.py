@@ -44,12 +44,16 @@ class FTressFXProps(bpy.types.PropertyGroup):
     
     @classmethod
     def register(FTressFXProps):
-        FTressFXProps.sBaseMesh = bpy.props.StringProperty(name="Base Mesh", 
-                                                            description="The mesh the hairs are attached to",
-                                                            update=OnTressFXBaseMeshChange)
-        bpy.types.Object.TressFXProps = bpy.props.PointerProperty(type=FTressFXProps, 
-                                                    name="TressFX Properties", 
-                                                    description="TressFX Properties")
+        FTressFXProps.sBaseMesh = bpy.props.StringProperty(
+            name="Base Mesh", 
+            description="The mesh the hairs are attached to",
+            update=OnTressFXBaseMeshChange
+            )
+        bpy.types.Object.TressFXProps = bpy.props.PointerProperty(
+            type=FTressFXProps, 
+            name="TressFX Properties", 
+            description="TressFX Properties"
+            )
 
     @classmethod
     def unregister(cls):
