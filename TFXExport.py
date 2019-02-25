@@ -30,6 +30,20 @@ def OnTressFXBaseMeshChange(self, context):
             print("Invalid Mesh selected.")
         else:
             print("new mesh set: " + oBaseMesh.name)
+
+def OnTressFXCollisionMeshChange(self, context):
+    #NOTE: self is FTressFXProps instance
+    oWM = context.window_manager
+    print("Collision Mesh Change")
+
+    if self.sCollisionMesh in bpy.data.objects:
+
+        oCollisionMesh = bpy.data.objects[self.sCollisionMesh]
+        if oCollisionMesh.type != "MESH":
+            self.sCollisionMesh = ""
+            print("Invalid collision Mesh selected.")
+        else:
+            print("new collision mesh set: " + oCollisionMesh.name)
             
             
 
@@ -50,10 +64,17 @@ class FTressFXProps(bpy.types.PropertyGroup):
             update=OnTressFXBaseMeshChange
             )
 
+        FTressFXProps.sCollisionMesh = bpy.props.StringProperty(
+            name="Collision Mesh", 
+            description="Collision Mesh for SDF",
+            update=OnTressFXCollisionMeshChange
+            )
+
         FTressFXProps.eNumVertsPerStrand = bpy.props.EnumProperty(
             name='Num Verts Per Strand',
             description='Number of vertices per strand',
-            items=[('4', '4', '4'),('8', '8', '8'),('16', '16', '16'),('32', '32', '32')]
+            items=[('4', '4', '4'),('8', '8', '8'),('16', '16', '16'),('32', '32', '32')],
+            default = '8'
             )
 
         FTressFXProps.fMinimumCurveLength = bpy.props.FloatProperty(
@@ -64,7 +85,7 @@ class FTressFXProps(bpy.types.PropertyGroup):
             precision = 6
             )
 
-        FTressFXProps.bBothEndsImmoveable = bpy.props.BoolProperty(
+        FTressFXProps.bBothEndsImmovable = bpy.props.BoolProperty(
             name="Both ends immovable", 
             description="makes both ending vertices get zero inverse mass",
             default=False
@@ -139,6 +160,9 @@ class FTressFXPanel(bpy.types.Panel):
         MainBox = layout.box()
         MainBox.label(text='Export Settings')
 
+        CollisionBox = layout.box()
+        CollisionBox.label(text="Collision (optional, SDF only)")
+
 
         if oTargetObject is not None:
 
@@ -172,7 +196,7 @@ class FTressFXPanel(bpy.types.Panel):
             LeftCol = BothEndsSplit.column()
             LeftCol.label(text="Both Ends Immovable:")
             RightCol = BothEndsSplit.column()
-            RightCol.prop(oTFXProps, "bBothEndsImmoveable", text="")
+            RightCol.prop(oTFXProps, "bBothEndsImmovable", text="")
 
             #Invert z
             InvertZRow = MainBox.row()
@@ -226,9 +250,46 @@ class FTressFXPanel(bpy.types.Panel):
             ExportRow = MainBox.row()             
             ExportRow.operator("tressfx.export", text="Export")
 
+            #collision Mesh
+            ColMeshRow = CollisionBox.row()
+            ColMeshSplit = ColMeshRow.split(percentage=0.5)            
+            LeftCol = ColMeshSplit.column()
+            LeftCol.label(text="Collision Mesh: ")
+            RightCol = ColMeshSplit.column()
+            RightCol.prop_search(oTFXProps, "sCollisionMesh",  context.scene, "objects", text="")
+            CollisionBox.row()
+
+            ColMeshExportRow = CollisionBox.row()
+            ColMeshExportRow.operator("tressfx.exportcollision", text="Export Collision Mesh")
+
+
+
         
 
+class FTressFXCollisionExport(bpy.types.Operator):
+    '''
+    TODO
+    '''    
 
+    #NOTE bl_idname has to be all lowercase :(
+    bl_idname = "tressfx.exportcollision"
+    bl_label = "TressFX: Export Collision Mesh"
+
+    @classmethod
+    def poll(cls, context):
+
+        #TODO: check if object is bound yet
+        return context.active_object is not None
+
+
+    def execute(self, context):
+        print("todo")
+        print("python version:")
+        print(sys.version_info)
+        self.report({'WARNING'}, "Not yet implemented!")
+        return {'CANCELLED'}
+        # oTargetObject = context.active_object
+        # return {'FINISHED'}      
 
 
 class FTressFXExport(bpy.types.Operator):
@@ -242,14 +303,60 @@ class FTressFXExport(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-
-        #TODO: check if object is bound yet
         return context.active_object is not None
 
+    def SaveTFXBinaryFile(self, sFilepath, lCurves, oBaseMesh):
+        nNumCurves = len(lCurves)
+        #todo
 
     def execute(self, context):
-        print("todo")
         oTargetObject = context.active_object
+        oTFXProps = oTargetObject.TressFXProps
+
+        #retreive stuff
+        print("SETTINGS:")
+
+        nNumVertsPerStrand = None
+        oBaseMesh = None
+
+        if oTFXProps.sBaseMesh and oTFXProps.sBaseMesh in bpy.data.objects:
+            oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
+            print('     Base Mesh: ' + oBaseMesh.name)
+        else:
+            self.report({'WARNING'}, "Base mesh not found!")
+            return {'CANCELLED'}
+
+        if oTFXProps.eNumVertsPerStrand is not None:
+            nNumVertsPerStrand = int(oTFXProps.eNumVertsPerStrand)
+            print('     nNumVertsPerStrand: ' + str(nNumVertsPerStrand))
+        else:
+            self.report({'WARNING'}, "Invalid num verts per strand!")
+            return {'CANCELLED'}
+
+        fMinCurvelength = oTFXProps.fMinimumCurveLength
+        print('     fMinCurvlength: ' + str(fMinCurvelength))
+        bBothEndsImmovable = oTFXProps.bBothEndsImmovable
+        print('     bBothEndsImmovable: ' + str(bBothEndsImmovable))
+        bInvertZAxis = oTFXProps.bInvertZAxis
+        print('     bInvertZAxis: ' + str(bInvertZAxis))
+        bInvertYAxisUV = oTFXProps.bInvertYAxisUV
+        print('     bInvertYAxisUV: ' + str(bInvertYAxisUV))
+        bRandomizeStrandsForLOD = oTFXProps.bRandomizeStrandsForLOD
+        print('     bRandomizeStrandsForLOD: ' + str(bRandomizeStrandsForLOD))
+        bExportTFX = oTFXProps.bExportTFX
+        print('     bExportTFX: ' + str(bExportTFX))
+        bExportTFXBone = oTFXProps.bExportTFXBone
+        print('     bExportTFXBone: ' + str(bExportTFXBone))
+        sOutputDir = oTFXProps.sOutputDir
+        print('     sOutputDir: ' + str(sOutputDir))
+
+        CurvesList = [] #TODO, actually get curves!
+        #TODO option to use curves or particle system, gonna start with particle system only
+        CurvesList = oTargetObject.particle_systems[0].particles
+        print(CurvesList)
+        if bExportTFX:
+            self.SaveTFXBinaryFile(sOutputDir, CurvesList, oBaseMesh)
+
         return {'FINISHED'}      
 
 
@@ -263,9 +370,7 @@ class FDirectorySelector(bpy.types.Operator, ExportHelper):
     # Define this to tell 'fileselect_add' that we want a directoy
     directory = bpy.props.StringProperty(
         name="Outdir Path",
-        description="Where I will save my stuff"
-        # subtype='DIR_PATH' is not needed to specify the selection mode.
-        # But this will be anyway a directory path.
+        description="Exports to this directory"
         )
 
     def execute(self, context):
@@ -285,12 +390,14 @@ class FDirectorySelector(bpy.types.Operator, ExportHelper):
 def register():
     bpy.utils.register_class(FDirectorySelector)
     bpy.utils.register_class(FTressFXExport)
+    bpy.utils.register_class(FTressFXCollisionExport)
     bpy.utils.register_class(FTressFXPanel)
     bpy.utils.register_class(FTressFXProps)
 
 def unregister():
     bpy.utils.unregister_class(FDirectorySelector)
     bpy.utils.unregister_class(FTressFXExport)
+    bpy.utils.unregister_class(FTressFXCollisionExport)
     bpy.utils.unregister_class(FTressFXPanel)
     bpy.utils.unregister_class(FTressFXProps)
 
