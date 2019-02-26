@@ -15,6 +15,29 @@ import sys
 import bpy
 import json
 from bpy_extras.io_utils import ExportHelper
+
+class TressFXTFXFileHeader(ctypes.Structure):
+	_fields_ = [('version', ctypes.c_float),
+                ('numHairStrands', ctypes.c_uint),
+                ('numVerticesPerStrand', ctypes.c_uint),
+                ('offsetVertexPosition', ctypes.c_uint),
+                ('offsetStrandUV', ctypes.c_uint),
+                ('offsetVertexUV', ctypes.c_uint),
+                ('offsetStrandThickness', ctypes.c_uint),
+                ('offsetVertexColor', ctypes.c_uint),
+                ('reserved', ctypes.c_uint * 32)]
+
+class TressFX_Float4(ctypes.Structure):
+	_fields_ = [('x', ctypes.c_float),
+                ('y', ctypes.c_float),
+                ('z', ctypes.c_float),
+                ('w', ctypes.c_float)]
+
+class TressFX_Float2(ctypes.Structure):
+	_fields_ = [('x', ctypes.c_float),
+                ('y', ctypes.c_float)]
+
+
 #__________________________________________________________________________
 
 def OnTressFXBaseMeshChange(self, context):
@@ -305,9 +328,36 @@ class FTressFXExport(bpy.types.Operator):
     def poll(cls, context):
         return context.active_object is not None
 
-    def SaveTFXBinaryFile(self, sFilepath, lCurves, oBaseMesh):
+    def SaveTFXBinaryFile(self, lCurves):
         nNumCurves = len(lCurves)
-        #todo
+        rootPositions = []
+
+        tfxHeader = TressFXTFXFileHeader()
+        tfxHeader.version = 4.0
+        tfxHeader.numHairStrands = nNumCurves
+        tfxHeader.numVerticesPerStrand = self.nNumVertsPerStrand
+        tfxHeader.offsetVertexPosition = ctypes.sizeof(TressFXTFXFileHeader)
+        tfxHeader.offsetStrandUV = 0
+        tfxHeader.offsetVertexUV = 0
+        tfxHeader.offsetStrandThickness = 0
+        tfxHeader.offsetVertexColor = 0
+
+        if self.oBaseMesh != None:
+            #TODO
+            # meshFn = OpenMaya.MFnMesh(meshShapedagPath)
+            # meshIntersector = OpenMaya.MMeshIntersector()
+            # meshIntersector.create(meshShapedagPath.node())
+            tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
+        
+        #TODO, save file name option
+        OutFilePath = self.sOutputDir + self.oBaseMesh.name
+        TfxFile = open(OutFilePath, "wb")
+	    TfxFile.write(tfxHeader)
+
+        for i in xrange(numCurves):
+            curveFn = curves[i]
+            #TODO
+
 
     def execute(self, context):
         oTargetObject = context.active_object
@@ -316,46 +366,50 @@ class FTressFXExport(bpy.types.Operator):
         #retreive stuff
         print("SETTINGS:")
 
-        nNumVertsPerStrand = None
-        oBaseMesh = None
+        self.nNumVertsPerStrand = None
+        self.oBaseMesh = None
 
         if oTFXProps.sBaseMesh and oTFXProps.sBaseMesh in bpy.data.objects:
-            oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
+            self.oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
             print('     Base Mesh: ' + oBaseMesh.name)
         else:
             self.report({'WARNING'}, "Base mesh not found!")
             return {'CANCELLED'}
 
         if oTFXProps.eNumVertsPerStrand is not None:
-            nNumVertsPerStrand = int(oTFXProps.eNumVertsPerStrand)
+            self.nNumVertsPerStrand = int(oTFXProps.eNumVertsPerStrand)
             print('     nNumVertsPerStrand: ' + str(nNumVertsPerStrand))
         else:
             self.report({'WARNING'}, "Invalid num verts per strand!")
             return {'CANCELLED'}
 
-        fMinCurvelength = oTFXProps.fMinimumCurveLength
-        print('     fMinCurvlength: ' + str(fMinCurvelength))
-        bBothEndsImmovable = oTFXProps.bBothEndsImmovable
-        print('     bBothEndsImmovable: ' + str(bBothEndsImmovable))
-        bInvertZAxis = oTFXProps.bInvertZAxis
-        print('     bInvertZAxis: ' + str(bInvertZAxis))
-        bInvertYAxisUV = oTFXProps.bInvertYAxisUV
-        print('     bInvertYAxisUV: ' + str(bInvertYAxisUV))
-        bRandomizeStrandsForLOD = oTFXProps.bRandomizeStrandsForLOD
-        print('     bRandomizeStrandsForLOD: ' + str(bRandomizeStrandsForLOD))
-        bExportTFX = oTFXProps.bExportTFX
-        print('     bExportTFX: ' + str(bExportTFX))
-        bExportTFXBone = oTFXProps.bExportTFXBone
-        print('     bExportTFXBone: ' + str(bExportTFXBone))
-        sOutputDir = oTFXProps.sOutputDir
-        print('     sOutputDir: ' + str(sOutputDir))
+        self.fMinCurvelength = oTFXProps.fMinimumCurveLength
+        print('     fMinCurvlength: ' + str(self.fMinCurvelength))
+        self.bBothEndsImmovable = oTFXProps.bBothEndsImmovable
+        print('     bBothEndsImmovable: ' + str(self.bBothEndsImmovable))
+        self.bInvertZAxis = oTFXProps.bInvertZAxis
+        print('     bInvertZAxis: ' + str(self.bInvertZAxis))
+        self.bInvertYAxisUV = oTFXProps.bInvertYAxisUV
+        print('     bInvertYAxisUV: ' + str(self.bInvertYAxisUV))
+        self.bRandomizeStrandsForLOD = oTFXProps.bRandomizeStrandsForLOD
+        print('     bRandomizeStrandsForLOD: ' + str(self.bRandomizeStrandsForLOD))
+        self.bExportTFX = oTFXProps.bExportTFX
+        print('     bExportTFX: ' + str(self.bExportTFX))
+        self.bExportTFXBone = oTFXProps.bExportTFXBone
+        print('     bExportTFXBone: ' + str(self.bExportTFXBone))
+        self.sOutputDir = oTFXProps.sOutputDir
+        print('     sOutputDir: ' + str(self.sOutputDir))
+
+        if self.bExportTFX == False and self.bExportTFXBone == False:
+            self.report({'WARNING'}, "Nothing selected to export")
+            return {'CANCELLED'}
 
         CurvesList = [] #TODO, actually get curves!
         #TODO option to use curves or particle system, gonna start with particle system only
         CurvesList = oTargetObject.particle_systems[0].particles
         print(CurvesList)
-        if bExportTFX:
-            self.SaveTFXBinaryFile(sOutputDir, CurvesList, oBaseMesh)
+        if self.bExportTFX:
+            self.SaveTFXBinaryFile(CurvesList)
 
         return {'FINISHED'}      
 
