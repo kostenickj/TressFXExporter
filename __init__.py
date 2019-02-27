@@ -12,8 +12,15 @@ bl_info = {
 import ctypes
 import random
 import sys
+import os
 import bpy
 import json
+
+thisdir = os.path.dirname(__file__)
+if not thisdir in sys.path:
+    sys.path.append(thisdir )
+
+import CurveSimplifier as simp
 from bpy_extras.io_utils import ExportHelper
 
 class TressFXTFXFileHeader(ctypes.Structure):
@@ -40,6 +47,10 @@ class TressFX_Float2(ctypes.Structure):
 
 #__________________________________________________________________________
 
+def InfoLog(OperatorContext, Message):
+    OperatorContext.report({'INFO'}, Message)
+
+# takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum
 def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
     
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -50,7 +61,7 @@ def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
     if len(CurvePoints) < nDesiredVertNum:
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.curve.select_all(action = 'SELECT')
-        byp.ops.curve.subdivide()
+        bpy.ops.curve.subdivide()
         return RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum)
     else:
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -361,7 +372,7 @@ class FTressFXExport(bpy.types.Operator):
     def poll(cls, context):
         return context.active_object is not None
 
-    def SaveTFXBinaryFile(self, lHairs):
+    def SaveTFXBinaryFile(self, context, lHairs):
         nNumCurves = len(lHairs)
         rootPositions = []
 
@@ -383,22 +394,50 @@ class FTressFXExport(bpy.types.Operator):
             tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
         
         #TODO, save file name option
-        OutFilePath = self.sOutputDir + self.oBaseMesh.name
+        OutFilePath = self.sOutputDir + self.oBaseMesh.name + ".tfx"
         print(OutFilePath)
-        # TfxFile = open(OutFilePath, "wb")
-	    # TfxFile.write(tfxHeader)
+        TfxFile = open(OutFilePath, "wb")
+        TfxFile.write(tfxHeader)
 
         for nHairIdx, CurveObj in enumerate(lHairs):
             
             print('nHairIdx ' +str(nHairIdx))
-            print('CurveObj ' + str(CurveObj))
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
             CurvePoints = [(vert.x, vert.y, vert.z) for vert in [p.co for p in CorrectCurve.data.splines[0].points]]
             
-            #now resample to exactly nNumVertsPerStrand 
+            #now resample to exactly nNumVertsPerStrand if needed
+            if len(CurvePoints) != self.nNumVertsPerStrand:
+                Simplifier = simp.Simplifier(CurvePoints)
+                # uses Visvalingam-Whyatt method
+                SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
+                CurvePoints = SimplifiedCurve
 
+            # now we ready to write the points
+            for PtIdx, Point in enumerate(CurvePoints):
+                p = TressFX_Float4()
+                p.x = Point[0]
+
+                if self.bInvertZAxis:
+                    p.z = -Point[2] # flip in z-axis
+                else:
+                    p.z = Point[2]
+                    
+                if self.bInvertYAxisUV:
+                    p.y = -Point[1]
+                else:
+                    p.y = Point[1]
+
+                # w component is an inverse mass
+                if PtIdx == 0 or PtIdx == 1: # the first two vertices are immovable always. 
+                    p.w = 0
+                else:
+                    p.w = 1.0
+                
+                TfxFile.write(p)
+                
+        TfxFile.close()
 
     def execute(self, context):
         oTargetObject = context.active_object
@@ -441,8 +480,12 @@ class FTressFXExport(bpy.types.Operator):
         self.sOutputDir = oTFXProps.sOutputDir
         print('     sOutputDir: ' + str(self.sOutputDir))
 
+        if len(self.sOutputDir) < 1:
+            self.report({'WARNING'}, "Output directory not set. Aborting.")
+            return {'CANCELLED'}
+
         if self.bExportTFX == False and self.bExportTFXBone == False:
-            self.report({'WARNING'}, "Nothing selected to export")
+            self.report({'WARNING'}, "Nothing selected to export. Aborting.")
             return {'CANCELLED'}
 
         CurvesList = [] #TODO, actually get curves!
@@ -454,17 +497,19 @@ class FTressFXExport(bpy.types.Operator):
 
         for mod in self.oBaseMesh.modifiers:
             if mod.type == 'PARTICLE_SYSTEM':
-                print("applying conert modifier")
+                print("Converting particle system to mesh...")
                 bpy.ops.object.modifier_convert(modifier=mod.name)
+                #TODO have user select the particle system instead of just picking the
+                # first one i come across
+                break
 
         #new mesh should already be selected
         bpy.ops.object.convert(target='CURVE')
         SeparateCurves(context)
 
         CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
-        print(CurvesList)
         if self.bExportTFX:
-            self.SaveTFXBinaryFile(CurvesList)
+            self.SaveTFXBinaryFile(context, CurvesList)
 
         return {'FINISHED'}      
 
