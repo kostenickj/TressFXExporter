@@ -6,7 +6,7 @@ bl_info = {
     "description": "YEET",
     "warning": "",
     "wiki_url": "",
-    "category": "",
+    "category": "Animation",
 }
 
 import ctypes
@@ -39,6 +39,39 @@ class TressFX_Float2(ctypes.Structure):
 
 
 #__________________________________________________________________________
+
+def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
+    
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.scene.objects.active = CurveObj
+
+    CurvePoints = [(vert.x, vert.y, vert.z) for vert in [p.co for p in CurveObj.data.splines[0].points]]
+    
+    if len(CurvePoints) < nDesiredVertNum:
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.curve.select_all(action = 'SELECT')
+        byp.ops.curve.subdivide()
+        return RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum)
+    else:
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return CurveObj
+
+def SeparateCurves(context):
+    active = context.active_object
+    splines = active.data.splines
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.curve.select_all(action = 'DESELECT')
+
+    while len(splines) > 1:
+        spline = splines[0]
+        if spline.bezier_points:
+            spline.bezier_points[0].select_control_point = True
+        elif spline.points:
+            spline.points[0].select = True
+        bpy.ops.curve.select_linked()
+        bpy.ops.curve.separate()
+
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 def OnTressFXBaseMeshChange(self, context):
     #NOTE: self is FTressFXProps instance
@@ -328,8 +361,8 @@ class FTressFXExport(bpy.types.Operator):
     def poll(cls, context):
         return context.active_object is not None
 
-    def SaveTFXBinaryFile(self, lCurves):
-        nNumCurves = len(lCurves)
+    def SaveTFXBinaryFile(self, lHairs):
+        nNumCurves = len(lHairs)
         rootPositions = []
 
         tfxHeader = TressFXTFXFileHeader()
@@ -351,12 +384,20 @@ class FTressFXExport(bpy.types.Operator):
         
         #TODO, save file name option
         OutFilePath = self.sOutputDir + self.oBaseMesh.name
-        TfxFile = open(OutFilePath, "wb")
-	    TfxFile.write(tfxHeader)
+        print(OutFilePath)
+        # TfxFile = open(OutFilePath, "wb")
+	    # TfxFile.write(tfxHeader)
 
-        for i in xrange(numCurves):
-            curveFn = curves[i]
-            #TODO
+        for nHairIdx, CurveObj in enumerate(lHairs):
+            
+            print('nHairIdx ' +str(nHairIdx))
+            print('CurveObj ' + str(CurveObj))
+
+            #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
+            CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
+            CurvePoints = [(vert.x, vert.y, vert.z) for vert in [p.co for p in CorrectCurve.data.splines[0].points]]
+            
+            #now resample to exactly nNumVertsPerStrand 
 
 
     def execute(self, context):
@@ -371,14 +412,14 @@ class FTressFXExport(bpy.types.Operator):
 
         if oTFXProps.sBaseMesh and oTFXProps.sBaseMesh in bpy.data.objects:
             self.oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
-            print('     Base Mesh: ' + oBaseMesh.name)
+            print('     Base Mesh: ' + self.oBaseMesh.name)
         else:
             self.report({'WARNING'}, "Base mesh not found!")
             return {'CANCELLED'}
 
         if oTFXProps.eNumVertsPerStrand is not None:
             self.nNumVertsPerStrand = int(oTFXProps.eNumVertsPerStrand)
-            print('     nNumVertsPerStrand: ' + str(nNumVertsPerStrand))
+            print('     nNumVertsPerStrand: ' + str(self.nNumVertsPerStrand))
         else:
             self.report({'WARNING'}, "Invalid num verts per strand!")
             return {'CANCELLED'}
@@ -406,7 +447,21 @@ class FTressFXExport(bpy.types.Operator):
 
         CurvesList = [] #TODO, actually get curves!
         #TODO option to use curves or particle system, gonna start with particle system only
-        CurvesList = oTargetObject.particle_systems[0].particles
+
+        #convert particle system to mesh using convert modifier
+        bpy.ops.object.select_all(action='DESELECT')
+        bpy.context.scene.objects.active = self.oBaseMesh
+
+        for mod in self.oBaseMesh.modifiers:
+            if mod.type == 'PARTICLE_SYSTEM':
+                print("applying conert modifier")
+                bpy.ops.object.modifier_convert(modifier=mod.name)
+
+        #new mesh should already be selected
+        bpy.ops.object.convert(target='CURVE')
+        SeparateCurves(context)
+
+        CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
         print(CurvesList)
         if self.bExportTFX:
             self.SaveTFXBinaryFile(CurvesList)
