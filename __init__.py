@@ -15,13 +15,16 @@ import sys
 import os
 import bpy
 import json
+import bmesh
+import mathutils
+from bpy_extras.io_utils import ExportHelper
 
 thisdir = os.path.dirname(__file__)
 if not thisdir in sys.path:
     sys.path.append(thisdir )
 
 import CurveSimplifier as simp
-from bpy_extras.io_utils import ExportHelper
+
 
 class TressFXTFXFileHeader(ctypes.Structure):
 	_fields_ = [('version', ctypes.c_float),
@@ -46,6 +49,25 @@ class TressFX_Float2(ctypes.Structure):
 
 
 #__________________________________________________________________________
+
+def GetUVFromVert_First(uv_layer, v):
+    for l in v.link_loops:
+        uv_data = l[uv_layer]
+        return uv_data.uv
+    return None
+
+
+def GetUVFromVert_average(uv_layer, v):
+    uv_average = mathutils.Vector((0.0, 0.0))
+    total = 0.0
+    for loop in v.link_loops:
+        uv_average += loop[uv_layer].uv
+        total += 1.0
+
+    if total != 0.0:
+        return uv_average * (1.0 / total)
+    else:
+        return None
 
 def InfoLog(OperatorContext, Message):
     OperatorContext.report({'INFO'}, Message)
@@ -374,7 +396,7 @@ class FTressFXExport(bpy.types.Operator):
 
     def SaveTFXBinaryFile(self, context, lHairs):
         nNumCurves = len(lHairs)
-        rootPositions = []
+        RootPositions = []
 
         tfxHeader = TressFXTFXFileHeader()
         tfxHeader.version = 4.0
@@ -386,12 +408,7 @@ class FTressFXExport(bpy.types.Operator):
         tfxHeader.offsetStrandThickness = 0
         tfxHeader.offsetVertexColor = 0
 
-        if self.oBaseMesh != None:
-            #TODO
-            # meshFn = OpenMaya.MFnMesh(meshShapedagPath)
-            # meshIntersector = OpenMaya.MMeshIntersector()
-            # meshIntersector.create(meshShapedagPath.node())
-            tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
+        tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
         
         #TODO, save file name option
         OutFilePath = self.sOutputDir + self.oBaseMesh.name + ".tfx"
@@ -400,8 +417,6 @@ class FTressFXExport(bpy.types.Operator):
         TfxFile.write(tfxHeader)
 
         for nHairIdx, CurveObj in enumerate(lHairs):
-            
-            print('nHairIdx ' +str(nHairIdx))
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
@@ -436,7 +451,29 @@ class FTressFXExport(bpy.types.Operator):
                     p.w = 1.0
                 
                 TfxFile.write(p)
-                
+            # enumerate(CurvePoints):
+            RootPositions.append(CurvePoints[0])
+        # enumerate(lHairs):
+        
+
+        Mesh = self.oBaseMesh.data
+        bm = bmesh.new()   # create an empty BMesh
+        bm.from_mesh(Mesh)   
+        ActiveUV = bm.loops.layers.uv.active
+
+        # get strand texture coords
+        for nPtIdx, Point in enumerate(RootPositions):
+            UVCoord = TressFX_Float2()
+            xyz = mathutils.Vector((Point[0],Point[1],Point[2]))
+            bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(xyz)
+            print(Location)
+            for v in bm.verts:
+                uv_first = GetUVFromVert_First(ActiveUV, v)
+                uv_average = GetUVFromVert_average(ActiveUV, v)
+                print("Vertex: %r, uv_first=%r, uv_average=%r" % (v, uv_first, uv_average))
+
+        bm.free() 
+
         TfxFile.close()
 
     def execute(self, context):
@@ -486,6 +523,10 @@ class FTressFXExport(bpy.types.Operator):
 
         if self.bExportTFX == False and self.bExportTFXBone == False:
             self.report({'WARNING'}, "Nothing selected to export. Aborting.")
+            return {'CANCELLED'}
+
+        if self.oBaseMesh.data.uv_layers.active is None:
+            self.report({'WARNING'}, "No UV's found on base mesh. Aborting")
             return {'CANCELLED'}
 
         CurvesList = [] #TODO, actually get curves!
