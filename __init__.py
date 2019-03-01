@@ -383,7 +383,7 @@ class FTressFXCollisionExport(bpy.types.Operator):
 
 class FTressFXExport(bpy.types.Operator):
     '''
-    TODO
+    Exports TressFX Files
     '''    
 
     #NOTE bl_idname has to be all lowercase :(
@@ -478,8 +478,8 @@ class FTressFXExport(bpy.types.Operator):
             UV3 = mathutils.Vector((UV3.x, UV3.y,1))
 
             UVAtPoint = mathutils.geometry.barycentric_transform( Location, p1, p2, p3, UV1, UV2, UV3 )
-            print('Location:' + str(Location))
-            print('UV: ' + str(UVAtPoint.xy))
+            #print('Location:' + str(Location))
+            #print('UV: ' + str(UVAtPoint.xy))
             UVCoord = TressFX_Float2()
             UVCoord.x = UVAtPoint.x
             UVCoord.y = UVAtPoint.y
@@ -545,8 +545,7 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'WARNING'}, "No UV's found on base mesh. Aborting")
             return {'CANCELLED'}
 
-        CurvesList = [] #TODO, actually get curves!
-        #TODO option to use curves or particle system, gonna start with particle system only
+        #TODO option to use existing curves or particle system, gonna start with particle system only
 
         #convert particle system to mesh using convert modifier
         bpy.ops.object.select_all(action='DESELECT')
