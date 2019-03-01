@@ -455,47 +455,42 @@ class FTressFXExport(bpy.types.Operator):
             RootPositions.append(CurvePoints[0])
         # enumerate(lHairs):
         
-
-        Mesh = self.oBaseMesh.data
-        bm = bmesh.new()   # create an empty BMesh
-        bm.from_mesh(Mesh)   
-        ActiveUV = bm.loops.layers.uv.active
-
         # get strand texture coords
         for nPtIdx, Point in enumerate(RootPositions):
-            UVCoord = TressFX_Float2()
-            xyz = mathutils.Vector((Point[0],Point[1],Point[2]))
-            bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(xyz)
+            
+            pVector = mathutils.Vector((Point[0],Point[1],Point[2]))
+
+            #get closest point on base mesh
+            bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
+            
+            #calculate uv at that point on the mesh
+            # https://blender.stackexchange.com/questions/79236/access-color-of-a-point-given-the-3d-position-on-the-surface-of-a-polygon
+            VerticesIndices = self.oBaseMesh.data.polygons[FaceIndex].vertices
+            p1, p2, p3 = [self.oBaseMesh.data.vertices[VerticesIndices[i]].co for i in range(3)]
+            UVMapIndices = self.oBaseMesh.data.polygons[FaceIndex].loop_indices
+            #TODO: user selects the uv map to use!
+            ActiveUVMap = self.oBaseMesh.data.uv_layers.active
+            UV1, UV2, UV3 = [ActiveUVMap.data[UVMapIndices[i]].uv for i in range(3)]
+            
+            #make them 3d so we can use barycentric_transform
+            UV1 = mathutils.Vector((UV1.x, UV1.y,1))
+            UV2 = mathutils.Vector((UV2.x, UV2.y,1))
+            UV3 = mathutils.Vector((UV3.x, UV3.y,1))
+
+            UVAtPoint = mathutils.geometry.barycentric_transform( Location, p1, p2, p3, UV1, UV2, UV3 )
             print('Location:' + str(Location))
-
-            verticesIndices = self.oBaseMesh.data.polygons[FaceIndex].vertices
-            p1, p2, p3 = [self.oBaseMesh.data.vertices[verticesIndices[i]].co for i in range(3)]
-            uvMapIndices = self.oBaseMesh.data.polygons[FaceIndex].loop_indices
-            uvMap = self.oBaseMesh.data.uv_layers.active
-            uv1, uv2, uv3 = [uvMap.data[uvMapIndices[i]].uv for i in range(3)]
-            uv1 = mathutils.Vector((uv1.x, uv1.y,1))
-            uv2 = mathutils.Vector((uv2.x, uv2.y,1))
-            uv3 = mathutils.Vector((uv3.x, uv3.y,1))
-
-            UVAtPoint = mathutils.geometry.barycentric_transform( Location, p1, p2, p3, uv1, uv2, uv3 )
             print('UV: ' + str(UVAtPoint.xy))
-            # for face in bm.faces:
-            #     for loop in face.loops:
-            #         vert = loop.vert
-            #         print("Loop Vert: (%f,%f,%f)" % vert.co[:])
-            #         if vert.co.xyz == Location.xyz:
-            #             print("found uv")
-            #             uv = loop[ActiveUV].uv
-            #             print("Loop UV: %f, %f" % uv[:])
+            UVCoord = TressFX_Float2()
+            UVCoord.x = UVAtPoint.x
+            UVCoord.y = UVAtPoint.y
+            if self.bInvertYAxisUV:
+                UVCoord.y = 1.0 - UVCoord.y; # DirectX has it inverted
 
-            # for v in bm.verts:
-            #     uv_first = GetUVFromVert_First(ActiveUV, v)
-            #     uv_average = GetUVFromVert_average(ActiveUV, v)
-            #     print("Vertex: %r, uv_first=%r, uv_average=%r" % (v, uv_first, uv_average))
-
-        bm.free() 
+            TfxFile.write(UVCoord)
+        #enumerate(RootPositions)
 
         TfxFile.close()
+        return RootPositions
 
     def execute(self, context):
         oTargetObject = context.active_object
@@ -569,9 +564,14 @@ class FTressFXExport(bpy.types.Operator):
         bpy.ops.object.convert(target='CURVE')
         SeparateCurves(context)
 
+        RootPositions = []
+
         CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
         if self.bExportTFX:
-            self.SaveTFXBinaryFile(context, CurvesList)
+            RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
+
+        if self.bExportTFXBone:
+            print('TODO')
 
         return {'FINISHED'}      
 
