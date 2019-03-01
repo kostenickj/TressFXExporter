@@ -466,11 +466,32 @@ class FTressFXExport(bpy.types.Operator):
             UVCoord = TressFX_Float2()
             xyz = mathutils.Vector((Point[0],Point[1],Point[2]))
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(xyz)
-            print(Location)
-            for v in bm.verts:
-                uv_first = GetUVFromVert_First(ActiveUV, v)
-                uv_average = GetUVFromVert_average(ActiveUV, v)
-                print("Vertex: %r, uv_first=%r, uv_average=%r" % (v, uv_first, uv_average))
+            print('Location:' + str(Location))
+
+            verticesIndices = self.oBaseMesh.data.polygons[FaceIndex].vertices
+            p1, p2, p3 = [self.oBaseMesh.data.vertices[verticesIndices[i]].co for i in range(3)]
+            uvMapIndices = self.oBaseMesh.data.polygons[FaceIndex].loop_indices
+            uvMap = self.oBaseMesh.data.uv_layers.active
+            uv1, uv2, uv3 = [uvMap.data[uvMapIndices[i]].uv for i in range(3)]
+            uv1 = mathutils.Vector((uv1.x, uv1.y,1))
+            uv2 = mathutils.Vector((uv2.x, uv2.y,1))
+            uv3 = mathutils.Vector((uv3.x, uv3.y,1))
+
+            UVAtPoint = mathutils.geometry.barycentric_transform( Location, p1, p2, p3, uv1, uv2, uv3 )
+            print('UV: ' + str(UVAtPoint.xy))
+            # for face in bm.faces:
+            #     for loop in face.loops:
+            #         vert = loop.vert
+            #         print("Loop Vert: (%f,%f,%f)" % vert.co[:])
+            #         if vert.co.xyz == Location.xyz:
+            #             print("found uv")
+            #             uv = loop[ActiveUV].uv
+            #             print("Loop UV: %f, %f" % uv[:])
+
+            # for v in bm.verts:
+            #     uv_first = GetUVFromVert_First(ActiveUV, v)
+            #     uv_average = GetUVFromVert_average(ActiveUV, v)
+            #     print("Vertex: %r, uv_first=%r, uv_average=%r" % (v, uv_first, uv_average))
 
         bm.free() 
 
