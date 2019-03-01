@@ -214,6 +214,11 @@ class FTressFXProps(bpy.types.PropertyGroup):
             name="Export Directory", 
             description="The export directory",
             )
+        
+        FTressFXProps.sOutputName = bpy.props.StringProperty(
+            name="Export File Name", 
+            description="The export filename without extension",
+            )
 
         bpy.types.Object.TressFXProps = bpy.props.PointerProperty(
             type=FTressFXProps, 
@@ -336,6 +341,13 @@ class FTressFXPanel(bpy.types.Panel):
             OutPathPickerRow.prop(oTFXProps, 'sOutputDir', text='')            
             OutPathPickerRow.operator("tressfx.export_dir", icon="FILE_FOLDER", text="")
 
+            #filename label
+            FileNameRow = MainBox.row()
+            FileNameRow.label(text="File name (without extension):")
+            
+            FilenameBoxRow = MainBox.row()
+            FilenameBoxRow.prop(oTFXProps, 'sOutputName', text='')    
+    
             ExportRow = MainBox.row()             
             ExportRow.operator("tressfx.export", text="Export")
 
@@ -383,7 +395,8 @@ class FTressFXCollisionExport(bpy.types.Operator):
 
 class FTressFXExport(bpy.types.Operator):
     '''
-    Exports TressFX Files
+    Exports TressFX Files.
+    Assumes that the selected UV map on the base mesh is the one to use when generating UV's for the hairs.
     '''    
 
     #NOTE bl_idname has to be all lowercase :(
@@ -410,8 +423,7 @@ class FTressFXExport(bpy.types.Operator):
 
         tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
         
-        #TODO, save file name option
-        OutFilePath = self.sOutputDir + self.oBaseMesh.name + ".tfx"
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfx"
         print(OutFilePath)
         TfxFile = open(OutFilePath, "wb")
         TfxFile.write(tfxHeader)
@@ -468,7 +480,7 @@ class FTressFXExport(bpy.types.Operator):
             VerticesIndices = self.oBaseMesh.data.polygons[FaceIndex].vertices
             p1, p2, p3 = [self.oBaseMesh.data.vertices[VerticesIndices[i]].co for i in range(3)]
             UVMapIndices = self.oBaseMesh.data.polygons[FaceIndex].loop_indices
-            #TODO: user selects the uv map to use!
+            # always assume the active layer is the one to use
             ActiveUVMap = self.oBaseMesh.data.uv_layers.active
             UV1, UV2, UV3 = [ActiveUVMap.data[UVMapIndices[i]].uv for i in range(3)]
             
@@ -485,7 +497,7 @@ class FTressFXExport(bpy.types.Operator):
             UVCoord.y = UVAtPoint.y
             if self.bInvertYAxisUV:
                 UVCoord.y = 1.0 - UVCoord.y; # DirectX has it inverted
-
+            
             TfxFile.write(UVCoord)
         #enumerate(RootPositions)
 
@@ -532,6 +544,8 @@ class FTressFXExport(bpy.types.Operator):
         print('     bExportTFXBone: ' + str(self.bExportTFXBone))
         self.sOutputDir = oTFXProps.sOutputDir
         print('     sOutputDir: ' + str(self.sOutputDir))
+        self.sOutputName = oTFXProps.sOutputName
+        print('     sOutputName: ' + str(self.sOutputName))
 
         if len(self.sOutputDir) < 1:
             self.report({'WARNING'}, "Output directory not set. Aborting.")
@@ -546,31 +560,45 @@ class FTressFXExport(bpy.types.Operator):
             return {'CANCELLED'}
 
         #TODO option to use existing curves or particle system, gonna start with particle system only
+        ExportMethod = 'PARTICLE SYSTEM'
 
-        #convert particle system to mesh using convert modifier
-        bpy.ops.object.select_all(action='DESELECT')
-        bpy.context.scene.objects.active = self.oBaseMesh
+        if ExportMethod == 'PARTICLE SYSTEM':
+            #convert particle system to mesh using convert modifier
+            bpy.ops.object.select_all(action='DESELECT')
+            bpy.context.scene.objects.active = self.oBaseMesh
 
-        for mod in self.oBaseMesh.modifiers:
-            if mod.type == 'PARTICLE_SYSTEM':
-                print("Converting particle system to mesh...")
-                bpy.ops.object.modifier_convert(modifier=mod.name)
-                #TODO have user select the particle system instead of just picking the
-                # first one i come across
-                break
-
-        #new mesh should already be selected
-        bpy.ops.object.convert(target='CURVE')
-        SeparateCurves(context)
-
-        RootPositions = []
+            for mod in self.oBaseMesh.modifiers:
+                if mod.type == 'PARTICLE_SYSTEM':
+                    print("Converting particle system '" + mod.name + "' to mesh...")
+                    bpy.ops.object.modifier_convert(modifier=mod.name)
+                    #TODO have user select the particle system instead of just picking the
+                    # first one i come across
+                    break
+                    
+            #new mesh should already be selected
+            bpy.ops.object.convert(target='CURVE')
+            SeparateCurves(context)
+        else:
+            print("using selected curves as strands")
 
         CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
+        print(str(len(CurvesList)) + " curves found...")
+        
+        RootPositions = []
+        
         if self.bExportTFX:
             RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
 
         if self.bExportTFXBone:
             print('TODO')
+
+        if ExportMethod == 'PARTICLE SYSTEM':
+            #delete the potentially thousands of curves we generated
+            print('Deleting ' + str(len(CurvesList)) + ' temporary curves...')
+            bpy.ops.object.select_all(action='DESELECT')
+            for Curve in CurvesList:
+                bpy.data.objects[Curve.name].select = True
+            bpy.ops.object.delete()
 
         return {'FINISHED'}      
 
