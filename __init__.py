@@ -113,7 +113,7 @@ def GetSortedWeightsFromTriangleVertices(_maxJointsPerVertex, vertexIndices, joi
 				final_pairs.append(pair)
 
 	# Set joint index zero if the weight is zero. 
-	for i in xrange(len(final_pairs)):
+	for i in range(len(final_pairs)):
 		if final_pairs[i].weight == 0:
 			final_pairs[i].joint_index = 0
 
@@ -609,21 +609,21 @@ class FTressFXExport(bpy.types.Operator):
         
         # joint weight array for all vertices. Each vertex will have TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  weights. 
         # It is initialized with zero for empty weight in case there are less weights than TRESSFX_MAX_INFLUENTIAL_BONE_COUNT .
-	    weightArray = [0] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices 
+        weightArray = [0] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices
         
         # joint index array for all vertices. It is initialized with -1 for an empty element in case 
         # there are less weights than TRESSFX_MAX_INFLUENTIAL_BONE_COUNT . 
-        jointIndexArray = [-1] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices 
+        jointIndexArray = [-1] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices
 																
         VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
-        influenceObjectsNames = [] # aka used bones
+        BonesArray = [] # aka used bones
 
         Armature = self.oBaseMesh.parent
 
         # TODO user can select bones/vertex groups to ignore when exporting
         for bn in Armature.data.bones:
             if bn.name in VertexGroupNames:
-                influenceObjectsNames.append(bn)
+                BonesArray.append(bn)
 
         Mesh = self.oBaseMesh.data
 
@@ -633,10 +633,10 @@ class FTressFXExport(bpy.types.Operator):
             weights = []
 
             # get weights for this vert
-            for BoneIndex, Bone in enumerate(influenceObjectsNames):
+            for BoneIndex, Bone in enumerate(BonesArray):
                 for g in vert.groups:
-                    if g.group == self.oBaseMesh.vertex_groups[Bone.name].index
-                        weights.append(g.weight)
+                        if g.group == self.oBaseMesh.vertex_groups[Bone.name].index :
+                            weights.append(g.weight)
 
             # create joint index pairs
             for i in range(len(weights)):
@@ -660,8 +660,10 @@ class FTressFXExport(bpy.types.Operator):
 	    # Save the tfxbone file.
 	    #------------------------
         filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxbone"
-    	TfxBoneFile = open(filepath, "wb")
+        TfxBoneFile = open(filepath, "wb")
         # Number of Bones
+
+        influenceObjectsNames = [bn.name for bn in BonesArray]
         TfxBoneFile.write(ctypes.c_int(len(influenceObjectsNames)))
         
         # Write all bone (joint) names
@@ -677,7 +679,7 @@ class FTressFXExport(bpy.types.Operator):
             TfxBoneFile.write(ctypes.c_byte(0))
 
         # Number of Strands
-	    TfxBoneFile.write(ctypes.c_int(len(triangleIdForStrandsList)))
+        TfxBoneFile.write(ctypes.c_int(len(triangleIdForStrandsList)))
 
         for i in range(len(triangleIdForStrandsList)):
             triangleId = triangleIdForStrandsList[i]
@@ -702,8 +704,8 @@ class FTressFXExport(bpy.types.Operator):
 
                 TfxBoneFile.write(ctypes.c_int(joint_index))
                 TfxBoneFile.write(ctypes.c_float(weight))
-	TfxBoneFile.close()
-    return
+        TfxBoneFile.close()
+        return
 
 
     def execute(self, context):
@@ -761,7 +763,7 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'WARNING'}, "No UV's found on base mesh. Aborting")
             return {'CANCELLED'}
 
-        if self.bExportTFXBone and self.oBaseMesh.parent.type != 'ARMATURE'
+        if self.bExportTFXBone and self.oBaseMesh.parent.type != 'ARMATURE':
             self.report({'WARNING'}, "No armature found on base mesh. Aborting")
             return {'CANCELLED'}
 
