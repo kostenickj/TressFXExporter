@@ -49,28 +49,35 @@ class TressFX_Float2(ctypes.Structure):
 
 
 #__________________________________________________________________________
+# p0, p1, p2 are three vertices of a triangle and p is inside the triangle
+def ComputeBarycentricCoordinates(p0, p1, p2, p):
+	v0 = p1 - p0
+	v1 = p2 - p0
+	v2 = p - p0
 
-def GetUVFromVert_First(uv_layer, v):
-    for l in v.link_loops:
-        uv_data = l[uv_layer]
-        return uv_data.uv
-    return None
+	v00 = v0 * v0
+	v01 = v0 * v1
+	v11 = v1 * v1
+	v20 = v2 * v0
+	v21 = v2 * v1
+	d = v00 * v11 - v01 * v01
+	v = (v11 * v20 - v01 * v21) / d # TODO: Do I need to care about divide-by-zero case?
+	w = (v00 * v21 - v01 * v20) / d
+	u = 1.0 - v - w
 
+	# make sure u, v, w are non-negative. It could happen sometimes.
+	u = max(u, 0)
+	v = max(v, 0)
+	w = max(w, 0)
 
-def GetUVFromVert_average(uv_layer, v):
-    uv_average = mathutils.Vector((0.0, 0.0))
-    total = 0.0
-    for loop in v.link_loops:
-        uv_average += loop[uv_layer].uv
-        total += 1.0
+	# normalize barycentric coordinates so that their sum is equal to 1
+	sum = u + v + w
+	u /= sum
+	v /= sum
+	w /= sum
 
-    if total != 0.0:
-        return uv_average * (1.0 / total)
-    else:
-        return None
+	return [u, v, w]
 
-def InfoLog(OperatorContext, Message):
-    OperatorContext.report({'INFO'}, Message)
 
 # takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum
 def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
@@ -396,6 +403,7 @@ class FTressFXCollisionExport(bpy.types.Operator):
 class FTressFXExport(bpy.types.Operator):
     '''
     Exports TressFX Files.
+    Base Mesh must be all triangles!
     Assumes that the selected UV map on the base mesh is the one to use when generating UV's for the hairs.
     '''    
 
@@ -504,6 +512,49 @@ class FTressFXExport(bpy.types.Operator):
         TfxFile.close()
         return RootPositions
 
+    def SaveTFXBoneBinaryFile(self, context, RootPositions): 
+
+        vertexTriangleList = []
+        triangleIdForStrandsList = []
+        baryCoordList = []
+        pointOnMeshList = []
+
+        for nPtIdx, Point in enumerate(RootPositions):
+
+            pVector = mathutils.Vector((Point[0],Point[1],Point[2]))
+	        # Find the closest point info
+            bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
+            TriangleIndices = self.oBaseMesh.data.polygons[FaceIndex].vertices
+
+            pointOnMesh = mathutils.Vector((Location[0],Location[1],Location[2]))
+            
+            pointOnMeshList.append(pointOnMesh)
+            vertexTriangleList.append((TriangleIndices[0], TriangleIndices[1], TriangleIndices[2]))
+            triangleIdForStrandsList.append(FaceIndex)
+            
+            # the 3 points that make up the triangle
+            p0, p1, p2 = [self.oBaseMesh.data.vertices[TriangleIndices[i]].co for i in range(3)]
+    
+            uvw_a = ComputeBarycentricCoordinates(p0, p1, p2, pointOnMesh)
+            uvw = mathutils.Vector((0,0,0))
+
+            uvw.x = uvw_a[0]
+            uvw.y = uvw_a[1]
+            uvw.z = uvw_a[2]
+
+            uvw.x = max(uvw.x, 0)
+            uvw.y = max(uvw.y, 0)
+            uvw.z = max(uvw.z, 0)
+
+            Sum = uvw.x + uvw.y + uvw.z
+            uvw.x /= Sum
+            uvw.y /= Sum
+            uvw.z /= Sum
+
+            baryCoordList.append(uvw)
+        print('ok')
+
+
     def execute(self, context):
         oTargetObject = context.active_object
         oTFXProps = oTargetObject.TressFXProps
@@ -590,10 +641,10 @@ class FTressFXExport(bpy.types.Operator):
             RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
 
         if self.bExportTFXBone:
-            print('TODO')
+            self.SaveTFXBoneBinaryFile(context, RootPositions)
 
         if ExportMethod == 'PARTICLE SYSTEM':
-            #delete the potentially thousands of curves we generated
+            # delete the potentially thousands of curves we generated
             print('Deleting ' + str(len(CurvesList)) + ' temporary curves...')
             bpy.ops.object.select_all(action='DESELECT')
             for Curve in CurvesList:
