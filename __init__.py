@@ -25,6 +25,8 @@ if not thisdir in sys.path:
 
 import CurveSimplifier as simp
 
+# Don't change the following maximum joints per vertex value. It must match the one in TressFX loader and simulation
+TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 4
 
 class TressFXTFXFileHeader(ctypes.Structure):
 	_fields_ = [('version', ctypes.c_float),
@@ -47,6 +49,13 @@ class TressFX_Float2(ctypes.Structure):
 	_fields_ = [('x', ctypes.c_float),
                 ('y', ctypes.c_float)]
 
+class WeightJointIndexPair:
+	weight = 0
+	joint_index = -1
+
+	# For sorting 
+	def __lt__(self, other):
+		return self.weight > other.weight
 
 #__________________________________________________________________________
 # p0, p1, p2 are three vertices of a triangle and p is inside the triangle
@@ -78,6 +87,46 @@ def ComputeBarycentricCoordinates(p0, p1, p2, p):
 
 	return [u, v, w]
 
+# vertexIndices is three vertex indices belong to one triangle
+def GetSortedWeightsFromTriangleVertices(_maxJointsPerVertex, vertexIndices, jointIndexArray, weightArray, baryCoord):
+	final_pairs = []
+
+	for j in range(_maxJointsPerVertex):
+		for i in range(3):
+			vertex_index = vertexIndices[i]
+			bary = baryCoord[i]
+
+			weight = weightArray[vertex_index*_maxJointsPerVertex + j] * bary
+			joint_index = jointIndexArray[vertex_index*_maxJointsPerVertex + j]
+
+			bFound = False
+			for k in range(len(final_pairs)):
+				if final_pairs[k].joint_index == joint_index:
+					final_pairs[k].weight += weight
+					bFound = True
+					break
+
+			if bFound == False:
+				pair = WeightJointIndexPair()
+				pair.weight = weight
+				pair.joint_index = joint_index
+				final_pairs.append(pair)
+
+	# Set joint index zero if the weight is zero. 
+	for i in xrange(len(final_pairs)):
+		if final_pairs[i].weight == 0:
+			final_pairs[i].joint_index = 0
+
+	final_pairs.sort()
+
+	# TODO: Is it needed to make the sum of weight equal to 1? 
+
+	# for i in range(len(final_pairs)):
+		# print '%d final_pairs.weight:%f final_pairs.joint_index:%d' % (i, final_pairs[i].weight, final_pairs[i].joint_index)
+
+	# number of elements of final_pairs could be more than _maxJointsPerVertex but it should be at least _maxJointsPerVertex. 
+	# If you really want it to be exactly _maxJointsPerVertex, you can try to pop out elements. 
+	return final_pairs     
 
 # takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum
 def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
@@ -473,7 +522,7 @@ class FTressFXExport(bpy.types.Operator):
                 TfxFile.write(p)
             # enumerate(CurvePoints):
             RootPositions.append(CurvePoints[0])
-        # enumerate(lHairs):
+        # enumerate(lHairs) END
         
         # get strand texture coords
         for nPtIdx, Point in enumerate(RootPositions):
@@ -507,7 +556,7 @@ class FTressFXExport(bpy.types.Operator):
                 UVCoord.y = 1.0 - UVCoord.y; # DirectX has it inverted
             
             TfxFile.write(UVCoord)
-        #enumerate(RootPositions)
+        #enumerate(RootPositions) END
 
         TfxFile.close()
         return RootPositions
@@ -529,7 +578,7 @@ class FTressFXExport(bpy.types.Operator):
             pointOnMesh = mathutils.Vector((Location[0],Location[1],Location[2]))
             
             pointOnMeshList.append(pointOnMesh)
-            vertexTriangleList.append((TriangleIndices[0], TriangleIndices[1], TriangleIndices[2]))
+            vertexTriangleList.append( (TriangleIndices[0], TriangleIndices[1], TriangleIndices[2]) )
             triangleIdForStrandsList.append(FaceIndex)
             
             # the 3 points that make up the triangle
@@ -552,7 +601,109 @@ class FTressFXExport(bpy.types.Operator):
             uvw.z /= Sum
 
             baryCoordList.append(uvw)
-        print('ok')
+        # enumerate(RootPositions) END
+
+        # --------------------------------------------------------
+
+        numVertices = len(self.oBaseMesh.data.vertices)        
+        
+        # joint weight array for all vertices. Each vertex will have TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  weights. 
+        # It is initialized with zero for empty weight in case there are less weights than TRESSFX_MAX_INFLUENTIAL_BONE_COUNT .
+	    weightArray = [0] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices 
+        
+        # joint index array for all vertices. It is initialized with -1 for an empty element in case 
+        # there are less weights than TRESSFX_MAX_INFLUENTIAL_BONE_COUNT . 
+        jointIndexArray = [-1] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices 
+																
+        VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
+        influenceObjectsNames = [] # aka used bones
+
+        Armature = self.oBaseMesh.parent
+
+        # TODO user can select bones/vertex groups to ignore when exporting
+        for bn in Armature.data.bones:
+            if bn.name in VertexGroupNames:
+                influenceObjectsNames.append(bn)
+
+        Mesh = self.oBaseMesh.data
+
+        # collect bone weights for all vertices in the mesh
+        for VertIdx, vert in enumerate(Mesh.vertices):
+            weightJointIndexPairs = []
+            weights = []
+
+            # get weights for this vert
+            for BoneIndex, Bone in enumerate(influenceObjectsNames):
+                for g in vert.groups:
+                    if g.group == self.oBaseMesh.vertex_groups[Bone.name].index
+                        weights.append(g.weight)
+
+            # create joint index pairs
+            for i in range(len(weights)):
+                pair = WeightJointIndexPair()
+                pair.weight = weights[i]
+                pair.joint_index = i 
+                weightJointIndexPairs.append(pair)
+
+            #sort them
+            weightJointIndexPairs.sort()
+
+            a = 0
+
+            for j in range(min(len(weightJointIndexPairs), TRESSFX_MAX_INFLUENTIAL_BONE_COUNT )):
+                weightArray[VertIdx * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  + a] = weightJointIndexPairs[j].weight
+                jointIndexArray[ VertIdx * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  + a] = weightJointIndexPairs[j].joint_index
+                a += 1
+        # enumerate(Mesh.vertices) END
+        
+        #------------------------
+	    # Save the tfxbone file.
+	    #------------------------
+        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxbone"
+    	TfxBoneFile = open(filepath, "wb")
+        # Number of Bones
+        TfxBoneFile.write(ctypes.c_int(len(influenceObjectsNames)))
+        
+        # Write all bone (joint) names
+        for i in range(len(influenceObjectsNames)):
+            # Bone Joint Index - TODO: might need to adjust this
+            TfxBoneFile.write(ctypes.c_int(i))
+            # Size of the string, add 1 to leave room for the nullterminate.
+            TfxBoneFile.write(ctypes.c_int(len(influenceObjectsNames[i]) + 1))
+            # Print the characters of the string 1 by 1.
+            for j in range(len(influenceObjectsNames[i])):
+                TfxBoneFile.write(ctypes.c_byte(ord(influenceObjectsNames[i][j])))
+            # Add a zero to null terminate the string.
+            TfxBoneFile.write(ctypes.c_byte(0))
+
+        # Number of Strands
+	    TfxBoneFile.write(ctypes.c_int(len(triangleIdForStrandsList)))
+
+        for i in range(len(triangleIdForStrandsList)):
+            triangleId = triangleIdForStrandsList[i]
+
+            # three vertex indices from one triangle - Following two lines should work equally but I haven't verified it yet. 
+            vertexIndices = vertexTriangleList[i]
+
+            baryCoord = baryCoordList[i]    
+            weightJointIndexPairs = GetSortedWeightsFromTriangleVertices(TRESSFX_MAX_INFLUENTIAL_BONE_COUNT , vertexIndices, jointIndexArray, weightArray, baryCoord)
+
+            # Index, the rest should be self explanatory.
+            TfxBoneFile.write(ctypes.c_int(i))
+            for j in range(4):
+                joint_index = 0
+                weight = 0.0
+
+                try:
+                    joint_index = weightJointIndexPairs[j].joint_index
+                    weight = weightJointIndexPairs[j].weight
+                except:
+                    pass
+
+                TfxBoneFile.write(ctypes.c_int(joint_index))
+                TfxBoneFile.write(ctypes.c_float(weight))
+	TfxBoneFile.close()
+    return
 
 
     def execute(self, context):
@@ -608,6 +759,10 @@ class FTressFXExport(bpy.types.Operator):
 
         if self.oBaseMesh.data.uv_layers.active is None:
             self.report({'WARNING'}, "No UV's found on base mesh. Aborting")
+            return {'CANCELLED'}
+
+        if self.bExportTFXBone and self.oBaseMesh.parent.type != 'ARMATURE'
+            self.report({'WARNING'}, "No armature found on base mesh. Aborting")
             return {'CANCELLED'}
 
         #TODO option to use existing curves or particle system, gonna start with particle system only
