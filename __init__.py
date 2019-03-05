@@ -254,12 +254,6 @@ class FTressFXProps(bpy.types.PropertyGroup):
             default=True
             )
 
-        FTressFXProps.bExportTFX = bpy.props.BoolProperty(
-            name="Export .tfx File", 
-            description="Exports the hair geometry and vertice data",
-            default=True
-            )
-
         FTressFXProps.bExportTFXBone = bpy.props.BoolProperty(
             name="Export .tfxbone File", 
             description="Export bone animation data for the skin mesh, requires base mesh to be set",
@@ -372,15 +366,7 @@ class FTressFXPanel(bpy.types.Panel):
             RightCol = RandomizeStrandsSplit.column()
             RightCol.prop(oTFXProps, "bRandomizeStrandsForLOD", text="")
 
-            #export tfx
-            ExportTFXRow = MainBox.row()
-            ExportTFXSplit = ExportTFXRow.split(percentage=0.5)
-            LeftCol = ExportTFXSplit.column()
-            LeftCol.label(text="Export Hair Data (.tfx):")
-            RightCol = ExportTFXSplit.column()
-            RightCol.prop(oTFXProps, "bExportTFX", text="")
-
-            #export tfxbone
+            #export tfxbone option
             ExportTFXBoneRow = MainBox.row()
             ExportTFXBoneSplit = ExportTFXBoneRow.split(percentage=0.5)
             LeftCol = ExportTFXBoneSplit.column()
@@ -480,7 +466,7 @@ class FTressFXExport(bpy.types.Operator):
 
         tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
         
-        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfx"
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_hairs"  + ".tfx"
         print(OutFilePath)
         TfxFile = open(OutFilePath, "wb")
         TfxFile.write(tfxHeader)
@@ -635,6 +621,7 @@ class FTressFXExport(bpy.types.Operator):
             # get weights for this vert
             for BoneIndex, Bone in enumerate(BonesArray):
                 for g in vert.groups:
+                        #g.group is bone index
                         if g.group == self.oBaseMesh.vertex_groups[Bone.name].index :
                             weights.append(g.weight)
 
@@ -659,7 +646,7 @@ class FTressFXExport(bpy.types.Operator):
         #------------------------
 	    # Save the tfxbone file.
 	    #------------------------
-        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxbone"
+        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_bones"  + ".tfxbone"
         TfxBoneFile = open(filepath, "wb")
         # Number of Bones
 
@@ -669,7 +656,10 @@ class FTressFXExport(bpy.types.Operator):
         # Write all bone (joint) names
         for i in range(len(influenceObjectsNames)):
             # Bone Joint Index - TODO: might need to adjust this
+            
+            #TODO: ? self.oBaseMesh.vertex_groups[Bone.name].index
             TfxBoneFile.write(ctypes.c_int(i))
+
             # Size of the string, add 1 to leave room for the nullterminate.
             TfxBoneFile.write(ctypes.c_int(len(influenceObjectsNames[i]) + 1))
             # Print the characters of the string 1 by 1.
@@ -742,8 +732,6 @@ class FTressFXExport(bpy.types.Operator):
         print('     bInvertYAxisUV: ' + str(self.bInvertYAxisUV))
         self.bRandomizeStrandsForLOD = oTFXProps.bRandomizeStrandsForLOD
         print('     bRandomizeStrandsForLOD: ' + str(self.bRandomizeStrandsForLOD))
-        self.bExportTFX = oTFXProps.bExportTFX
-        print('     bExportTFX: ' + str(self.bExportTFX))
         self.bExportTFXBone = oTFXProps.bExportTFXBone
         print('     bExportTFXBone: ' + str(self.bExportTFXBone))
         self.sOutputDir = oTFXProps.sOutputDir
@@ -753,10 +741,6 @@ class FTressFXExport(bpy.types.Operator):
 
         if len(self.sOutputDir) < 1:
             self.report({'WARNING'}, "Output directory not set. Aborting.")
-            return {'CANCELLED'}
-
-        if self.bExportTFX == False and self.bExportTFXBone == False:
-            self.report({'WARNING'}, "Nothing selected to export. Aborting.")
             return {'CANCELLED'}
 
         if self.oBaseMesh.data.uv_layers.active is None:
@@ -792,10 +776,7 @@ class FTressFXExport(bpy.types.Operator):
         CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
         print(str(len(CurvesList)) + " curves found...")
         
-        RootPositions = []
-        
-        if self.bExportTFX:
-            RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
+        RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
 
         if self.bExportTFXBone:
             self.SaveTFXBoneBinaryFile(context, RootPositions)
