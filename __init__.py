@@ -533,8 +533,7 @@ class FTressFXExport(bpy.types.Operator):
             UV3 = mathutils.Vector((UV3.x, UV3.y,1))
 
             UVAtPoint = mathutils.geometry.barycentric_transform( Location, p1, p2, p3, UV1, UV2, UV3 )
-            #print('Location:' + str(Location))
-            #print('UV: ' + str(UVAtPoint.xy))
+
             UVCoord = TressFX_Float2()
             UVCoord.x = UVAtPoint.x
             UVCoord.y = UVAtPoint.y
@@ -569,13 +568,25 @@ class FTressFXExport(bpy.types.Operator):
             
             # the 3 points that make up the triangle
             p0, p1, p2 = [self.oBaseMesh.data.vertices[TriangleIndices[i]].co for i in range(3)]
-    
-            uvw_a = ComputeBarycentricCoordinates(p0, p1, p2, pointOnMesh)
+            UVMapIndices = self.oBaseMesh.data.polygons[FaceIndex].loop_indices
+           
+            # always assume the active layer is the one to use
+            ActiveUVMap = self.oBaseMesh.data.uv_layers.active
+            UV1, UV2, UV3 = [ActiveUVMap.data[UVMapIndices[i]].uv for i in range(3)]
+            UV1 = mathutils.Vector((UV1.x, UV1.y,1))
+            UV2 = mathutils.Vector((UV2.x, UV2.y,1))
+            UV3 = mathutils.Vector((UV3.x, UV3.y,1))
+            
+            uvw_a = mathutils.geometry.barycentric_transform( pointOnMesh, p0, p1, p2 , UV1, UV2, UV3 )
+            #uvw_a = ComputeBarycentricCoordinates(p0, p1, p2, pointOnMesh)
+            
             uvw = mathutils.Vector((0,0,0))
-
-            uvw.x = uvw_a[0]
-            uvw.y = uvw_a[1]
-            uvw.z = uvw_a[2]
+            # uvw.x = uvw_a[0]
+            # uvw.y = uvw_a[1]
+            # uvw.z = uvw_a[2]
+            uvw.x = uvw_a.x
+            uvw.y = uvw_a.y
+            uvw.z = uvw_a.z
 
             uvw.x = max(uvw.x, 0)
             uvw.y = max(uvw.y, 0)
@@ -789,6 +800,7 @@ class FTressFXExport(bpy.types.Operator):
                 bpy.data.objects[Curve.name].select = True
             bpy.ops.object.delete()
 
+        print('Done.')
         return {'FINISHED'}      
 
 
