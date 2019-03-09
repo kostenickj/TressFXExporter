@@ -613,33 +613,39 @@ class FTressFXExport(bpy.types.Operator):
         jointIndexArray = [-1] * TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  * numVertices
 																
         VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
-        BonesArray = [] # aka used bones
+        AllBonesArray = [] # aka used bones
+        BonesArray_WithWeightsOnly = []
 
         Armature = self.oBaseMesh.parent
 
         # TODO user can select bones/vertex groups to ignore when exporting
         for bn in Armature.data.bones:
             if bn.name in VertexGroupNames:
-                BonesArray.append(bn)
+                AllBonesArray.append(bn)
 
         Mesh = self.oBaseMesh.data
 
         # collect bone weights for all vertices in the mesh
         for VertIdx, vert in enumerate(Mesh.vertices):
+            
             weightJointIndexPairs = []
             weights = []
 
             # get weights for this vert
-            for BoneIndex, Bone in enumerate(BonesArray):
+            for BoneIndex, Bone in enumerate(AllBonesArray):
                 for g in vert.groups:
                         #g.group is bone index
-                        if g.group == self.oBaseMesh.vertex_groups[Bone.name].index :
+                        if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
                             weights.append(g.weight)
+                            if Bone not in BonesArray_WithWeightsOnly:
+                                BonesArray_WithWeightsOnly.append(Bone)
 
             # create joint index pairs
             for i in range(len(weights)):
                 pair = WeightJointIndexPair()
                 pair.weight = weights[i]
+                # i think problem is here...joint index is not i, it is self.oBaseMesh.vertex_groups[Bone.name].index
+                #nvmnd?
                 pair.joint_index = i 
                 weightJointIndexPairs.append(pair)
 
@@ -661,7 +667,7 @@ class FTressFXExport(bpy.types.Operator):
         TfxBoneFile = open(filepath, "wb")
         # Number of Bones
 
-        influenceObjectsNames = [bn.name for bn in BonesArray]
+        influenceObjectsNames = [bn.name for bn in BonesArray_WithWeightsOnly]
         TfxBoneFile.write(ctypes.c_int(len(influenceObjectsNames)))
         
         # Write all bone (joint) names
