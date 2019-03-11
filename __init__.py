@@ -17,6 +17,7 @@ import bpy
 import json
 import bmesh
 import mathutils
+from math import sqrt
 from bpy_extras.io_utils import ExportHelper
 
 thisdir = os.path.dirname(__file__)
@@ -56,6 +57,18 @@ class WeightJointIndexPair:
 	# For sorting 
 	def __lt__(self, other):
 		return self.weight > other.weight
+
+def VecDistance(vec1, vec2):
+    return sqrt((vec1.x - vec2.x)**2 + (vec1.y - vec2.y)**2 + (vec1.z - vec2.z)**2)
+
+def FindIndexOfClosestVector(Point, VecList):
+    closest = VecList[0]
+    index = 0
+    for i in range (0, len(VecList)):
+        if VecDistance(VecList[i], Point) < VecDistance(Point, closest):
+            closest = VecList[i]
+            index = i
+    return index
 
 #__________________________________________________________________________
 # p0, p1, p2 are three vertices of a triangle and p is inside the triangle
@@ -507,6 +520,9 @@ class FTressFXExport(bpy.types.Operator):
                 
                 TfxFile.write(p)
             # enumerate(CurvePoints):
+
+            # How do i know which point is the start of the curve?
+            # for now im assuming its 0, not the end
             RootPositions.append(CurvePoints[0])
         # enumerate(lHairs) END
         
@@ -545,6 +561,21 @@ class FTressFXExport(bpy.types.Operator):
 
         TfxFile.close()
         return RootPositions
+
+    def SaveTFXBoneJSONFile(self, context, RootPositions):
+
+        for nPtIdx, Point in enumerate(RootPositions):
+            pVector = mathutils.Vector((Point[0],Point[1],Point[2]))
+	        # Find the closest point info
+            bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
+
+            # find closest vertex to location
+            FaceObj = self.oBaseMesh.data.polygons[FaceIndex]
+            FaceVertices = [self.oBaseMesh.data.vertices[i] for i in FaceObj.vertices]
+            ClosestVertIndex = FindIndexOfClosestVector(Location, [F.co for F in FaceVertices])
+            ClosestVert = FaceVertices[ClosestVertIndex]
+            print(ClosestVert)
+
 
     def SaveTFXBoneBinaryFile(self, context, RootPositions): 
 
@@ -796,7 +827,7 @@ class FTressFXExport(bpy.types.Operator):
         RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
 
         if self.bExportTFXBone:
-            self.SaveTFXBoneBinaryFile(context, RootPositions)
+            self.SaveTFXBoneJSONFile(context, RootPositions)
 
         if ExportMethod == 'PARTICLE SYSTEM':
             # delete the potentially thousands of curves we generated
