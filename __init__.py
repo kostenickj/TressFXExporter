@@ -50,6 +50,13 @@ class TressFX_Float2(ctypes.Structure):
 	_fields_ = [('x', ctypes.c_float),
                 ('y', ctypes.c_float)]
 
+class BoneweightmapObj:
+    weight = -1
+    boneName= ''
+    # For sorting 
+    def __lt__(self, other):
+        return self.weight > other.weight
+
 class WeightJointIndexPair:
 	weight = 0
 	joint_index = -1
@@ -564,8 +571,21 @@ class FTressFXExport(bpy.types.Operator):
 
     def SaveTFXBoneJSONFile(self, context, RootPositions):
 
-        for nPtIdx, Point in enumerate(RootPositions):
-            pVector = mathutils.Vector((Point[0],Point[1],Point[2]))
+        VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
+        AllBonesArray = [] # aka used bones
+        BonesArray_WithWeightsOnly = []
+        FinalObj = {}
+        FinalObj['SkinningData'] = []
+
+        Armature = self.oBaseMesh.parent
+
+        # TODO user can select bones/vertex groups to ignore when exporting
+        for bn in Armature.data.bones:
+            if bn.name in VertexGroupNames:
+                AllBonesArray.append(bn)
+
+        for RootIndex, RootPoint in enumerate(RootPositions):
+            pVector = mathutils.Vector((RootPoint[0],RootPoint[1],RootPoint[2]))
 	        # Find the closest point info
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
 
@@ -574,7 +594,38 @@ class FTressFXExport(bpy.types.Operator):
             FaceVertices = [self.oBaseMesh.data.vertices[i] for i in FaceObj.vertices]
             ClosestVertIndex = FindIndexOfClosestVector(Location, [F.co for F in FaceVertices])
             ClosestVert = FaceVertices[ClosestVertIndex]
-            print(ClosestVert)
+
+            ClosestVertWeights = []
+
+            for g in ClosestVert.groups:
+                #g.group is bone index
+                #uhhhh bone.name doesnt exist yet lol 
+                if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
+
+                    boneweightmapObj = BoneweightmapObj()
+                    boneweightmapObj.boneName = Bone.name
+                    boneweightmapObj.weight = g.weight
+                    ClosestVertWeights.append( boneweightmapObj )
+                    if Bone not in BonesArray_WithWeightsOnly:
+                        BonesArray_WithWeightsOnly.append(Bone)
+            
+            ClosestVertWeights.sort()
+            #make sure we have at least 4
+            while len(ClosestVertWeights) < TRESSFX_MAX_INFLUENTIAL_BONE_COUNT :
+                ClosestVertWeights.append(BoneweightmapObj())
+
+            FinalObj['SkinningData'] = FinalObj['SkinningData'] + ClosestVertWeights
+        #enumerate(RootPositions):
+
+
+        FinalObj['bonesList'] = BonesArray_WithWeightsOnly
+        #------------------------
+	    # Save the tfxbone file.
+	    #------------------------
+        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_bones"  + ".tfxbone"
+        with open(filepath, "w") as TfxBoneFile :
+            TfxBoneFile.write(json.dumps(FinalObj, indent=4))
+        return
 
 
     def SaveTFXBoneBinaryFile(self, context, RootPositions): 
