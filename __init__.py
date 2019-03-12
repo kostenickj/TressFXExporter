@@ -627,7 +627,7 @@ class FTressFXExport(bpy.types.Operator):
         #------------------------
 	    # Save the tfxbone file.
 	    #------------------------
-        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_bones"  + ".tfxbone"
+        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_bones"  + ".tfxbonejson"
         with open(filepath, "w") as TfxBoneFile :
             TfxBoneFile.write(json.dumps(FinalObj, indent=4))
         return
