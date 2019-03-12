@@ -52,7 +52,7 @@ class TressFX_Float2(ctypes.Structure):
 
 class BoneweightmapObj:
     weight = -1
-    boneName= ''
+    boneName= None
     # For sorting 
     def __lt__(self, other):
         return self.weight > other.weight
@@ -600,24 +600,29 @@ class FTressFXExport(bpy.types.Operator):
             for g in ClosestVert.groups:
                 #g.group is bone index
                 #uhhhh bone.name doesnt exist yet lol 
-                if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
+                for Bone in AllBonesArray:
+                    if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
 
-                    boneweightmapObj = BoneweightmapObj()
-                    boneweightmapObj.boneName = Bone.name
-                    boneweightmapObj.weight = g.weight
-                    ClosestVertWeights.append( boneweightmapObj )
-                    if Bone not in BonesArray_WithWeightsOnly:
-                        BonesArray_WithWeightsOnly.append(Bone)
+                        boneweightmapObj = BoneweightmapObj()
+                        boneweightmapObj.boneName = Bone.name
+                        boneweightmapObj.weight = g.weight
+                        ClosestVertWeights.append( boneweightmapObj )
+                        if Bone.name not in BonesArray_WithWeightsOnly:
+                            BonesArray_WithWeightsOnly.append(Bone.name)
             
             ClosestVertWeights.sort()
             #make sure we have at least 4
             while len(ClosestVertWeights) < TRESSFX_MAX_INFLUENTIAL_BONE_COUNT :
                 ClosestVertWeights.append(BoneweightmapObj())
 
-            FinalObj['SkinningData'] = FinalObj['SkinningData'] + ClosestVertWeights
+            for boneweightmapObj in ClosestVertWeights:
+                j = {}
+                j['weight'] = boneweightmapObj.weight
+                j['boneName'] = boneweightmapObj.boneName
+                FinalObj['SkinningData'].append( j )
         #enumerate(RootPositions):
 
-
+        FinalObj['numGuideStrands'] = len(RootPositions)
         FinalObj['bonesList'] = BonesArray_WithWeightsOnly
         #------------------------
 	    # Save the tfxbone file.
