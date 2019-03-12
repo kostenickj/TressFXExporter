@@ -52,7 +52,7 @@ class TressFX_Float2(ctypes.Structure):
 
 class BoneweightmapObj:
     weight = -1
-    boneName= None
+    boneName= ""
     # For sorting 
     def __lt__(self, other):
         return self.weight > other.weight
@@ -575,7 +575,7 @@ class FTressFXExport(bpy.types.Operator):
         AllBonesArray = [] # aka used bones
         BonesArray_WithWeightsOnly = []
         FinalObj = {}
-        FinalObj['SkinningData'] = []
+        FinalObj['skinningData'] = []
 
         Armature = self.oBaseMesh.parent
 
@@ -619,7 +619,7 @@ class FTressFXExport(bpy.types.Operator):
                 j = {}
                 j['weight'] = boneweightmapObj.weight
                 j['boneName'] = boneweightmapObj.boneName
-                FinalObj['SkinningData'].append( j )
+                FinalObj['skinningData'].append( j )
         #enumerate(RootPositions):
 
         FinalObj['numGuideStrands'] = len(RootPositions)
