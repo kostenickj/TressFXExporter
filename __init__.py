@@ -51,7 +51,7 @@ class TressFX_Float2(ctypes.Structure):
                 ('y', ctypes.c_float)]
 
 class BoneweightmapObj:
-    weight = -1
+    weight = 0.0
     boneName= ""
     # For sorting 
     def __lt__(self, other):
