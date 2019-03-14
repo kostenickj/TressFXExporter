@@ -275,12 +275,6 @@ class FTressFXProps(bpy.types.PropertyGroup):
             default=True
             )
 
-        FTressFXProps.bExportTFXBone = bpy.props.BoolProperty(
-            name="Export .tfxbone File", 
-            description="Export bone animation data for the skin mesh, requires base mesh to be set",
-            default=False
-            )
-
         FTressFXProps.sOutputDir = bpy.props.StringProperty(
             name="Export Directory", 
             description="The export directory",
@@ -387,14 +381,6 @@ class FTressFXPanel(bpy.types.Panel):
             RightCol = RandomizeStrandsSplit.column()
             RightCol.prop(oTFXProps, "bRandomizeStrandsForLOD", text="")
 
-            #export tfxbone option
-            ExportTFXBoneRow = MainBox.row()
-            ExportTFXBoneSplit = ExportTFXBoneRow.split(percentage=0.5)
-            LeftCol = ExportTFXBoneSplit.column()
-            LeftCol.label(text="Export Bone Data (.tfxbone):")
-            RightCol = ExportTFXBoneSplit.column()
-            RightCol.prop(oTFXProps, "bExportTFXBone", text="")
-
             #export path label
             OutputPathRow = MainBox.row()
             OutputPathRow.label(text="Output Path:")
@@ -471,26 +457,19 @@ class FTressFXExport(bpy.types.Operator):
     def poll(cls, context):
         return context.active_object is not None
 
-    def SaveTFXBinaryFile(self, context, lHairs):
+    def SaveTFXHairJsonFile(self, context, lHairs):
+        
         nNumCurves = len(lHairs)
         RootPositions = []
-
-        tfxHeader = TressFXTFXFileHeader()
-        tfxHeader.version = 4.0
-        tfxHeader.numHairStrands = nNumCurves
-        tfxHeader.numVerticesPerStrand = self.nNumVertsPerStrand
-        tfxHeader.offsetVertexPosition = ctypes.sizeof(TressFXTFXFileHeader)
-        tfxHeader.offsetStrandUV = 0
-        tfxHeader.offsetVertexUV = 0
-        tfxHeader.offsetStrandThickness = 0
-        tfxHeader.offsetVertexColor = 0
-
-        tfxHeader.offsetStrandUV = tfxHeader.offsetVertexPosition + nNumCurves * self.nNumVertsPerStrand * ctypes.sizeof(TressFX_Float4)
         
-        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_hairs"  + ".tfx"
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfx"
         print(OutFilePath)
-        TfxFile = open(OutFilePath, "wb")
-        TfxFile.write(tfxHeader)
+
+        FinalObj = {}
+        FinalObj['positions'] = []
+        FinalObj['uvs'] = []
+        FinalObj['numHairStrands'] = nNumCurves
+        FinalObj['numVerticesPerStrand'] = self.nNumVertsPerStrand
 
         for nHairIdx, CurveObj in enumerate(lHairs):
 
@@ -506,7 +485,9 @@ class FTressFXExport(bpy.types.Operator):
                 CurvePoints = SimplifiedCurve
 
             # now we ready to write the points
+            strandVerts = []
             for PtIdx, Point in enumerate(CurvePoints):
+                vert = {}
                 p = TressFX_Float4()
                 p.x = Point[0]
 
@@ -526,8 +507,13 @@ class FTressFXExport(bpy.types.Operator):
                 else:
                     p.w = 1.0
                 
-                TfxFile.write(p)
+                vert['x'] = p.x
+                vert['y'] = p.y
+                vert['z'] = p.z
+                vert['w'] = p.w
+                strandVerts.append(vert)
             # enumerate(CurvePoints):
+            FinalObj['positions'].append(strandVerts)
 
             # How do i know which point is the start of the curve?
             # for now im assuming its 0, not the end
@@ -564,13 +550,19 @@ class FTressFXExport(bpy.types.Operator):
             if self.bInvertYAxisUV:
                 UVCoord.y = 1.0 - UVCoord.y; # DirectX has it inverted
             
-            TfxFile.write(UVCoord)
+            uvObj = {}
+            uvObj['x'] = UVCoord.x
+            uvObj['y'] = UVCoord.y
+            FinalObj['uvs'].append(uvObj)
         #enumerate(RootPositions) END
 
-        TfxFile.close()
+        FinalObj['tfxBoneData'] = self.getTFXBoneJSON(context, RootPositions)
+
+        with open(OutFilePath, "w") as TfxFile :
+            TfxFile.write(json.dumps(FinalObj, indent=4))
         return RootPositions
 
-    def SaveTFXBoneJSONFile(self, context, RootPositions):
+    def getTFXBoneJSON(self, context, RootPositions):
 
         VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
         AllBonesArray = [] # aka used bones
@@ -599,8 +591,7 @@ class FTressFXExport(bpy.types.Operator):
             ClosestVertWeights = []
 
             for g in ClosestVert.groups:
-                #g.group is bone index
-                #uhhhh bone.name doesnt exist yet lol 
+                # NOTE: g.group is bone index
                 for Bone in AllBonesArray:
                     if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
 
@@ -625,13 +616,8 @@ class FTressFXExport(bpy.types.Operator):
 
         FinalObj['numGuideStrands'] = len(RootPositions)
         FinalObj['bonesList'] = BonesArray_WithWeightsOnly
-        #------------------------
-	    # Save the tfxbone file.
-	    #------------------------
-        filepath =  self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name) + "_bones"  + ".tfxbonejson"
-        with open(filepath, "w") as TfxBoneFile :
-            TfxBoneFile.write(json.dumps(FinalObj, indent=4))
-        return
+
+        return FinalObj
 
     def execute(self, context):
         oTargetObject = context.active_object
@@ -667,8 +653,6 @@ class FTressFXExport(bpy.types.Operator):
         print('     bInvertYAxisUV: ' + str(self.bInvertYAxisUV))
         self.bRandomizeStrandsForLOD = oTFXProps.bRandomizeStrandsForLOD
         print('     bRandomizeStrandsForLOD: ' + str(self.bRandomizeStrandsForLOD))
-        self.bExportTFXBone = oTFXProps.bExportTFXBone
-        print('     bExportTFXBone: ' + str(self.bExportTFXBone))
         self.sOutputDir = oTFXProps.sOutputDir
         print('     sOutputDir: ' + str(self.sOutputDir))
         self.sOutputName = oTFXProps.sOutputName
@@ -682,7 +666,7 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'WARNING'}, "No UV's found on base mesh. Aborting")
             return {'CANCELLED'}
 
-        if self.bExportTFXBone and self.oBaseMesh.parent.type != 'ARMATURE':
+        if self.oBaseMesh.parent.type != 'ARMATURE':
             self.report({'WARNING'}, "No armature found on base mesh. Aborting")
             return {'CANCELLED'}
 
@@ -713,13 +697,8 @@ class FTressFXExport(bpy.types.Operator):
         if len(CurvesList) < TRESSFX_SIM_THREAD_GROUP_SIZE:
             self.report({'WARNING'}, "Not enough curves found, at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
             return {'CANCELLED'}
-
-
         
-        RootPositions = self.SaveTFXBinaryFile(context, CurvesList)
-
-        if self.bExportTFXBone:
-            self.SaveTFXBoneJSONFile(context, RootPositions)
+        self.SaveTFXHairJsonFile(context, CurvesList)
 
         if ExportMethod == 'PARTICLE SYSTEM':
             # delete the potentially thousands of curves we generated
