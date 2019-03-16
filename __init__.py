@@ -462,7 +462,7 @@ class FTressFXExport(bpy.types.Operator):
         nNumCurves = len(lHairs)
         RootPositions = []
         
-        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfx"
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
         print(OutFilePath)
 
         FinalObj = {}
