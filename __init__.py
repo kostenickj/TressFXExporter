@@ -224,6 +224,7 @@ class FTressFXProps(bpy.types.PropertyGroup):
     
     @classmethod
     def register(FTressFXProps):
+
         FTressFXProps.sBaseMesh = bpy.props.StringProperty(
             name="Base Mesh", 
             description="The mesh the hairs are attached and weighted to",
@@ -234,6 +235,13 @@ class FTressFXProps(bpy.types.PropertyGroup):
             name="Collision Mesh", 
             description="Collision Mesh for SDF",
             update=OnTressFXCollisionMeshChange
+            )
+
+        FTressFXProps.eExportType = bpy.props.EnumProperty(
+            name='Export Type',
+            description='Export method, uses either particle system or selected curves',
+            items=[('PARTICLE_SYSTEM', 'PARTICLE_SYSTEM', 'PARTICLE_SYSTEM'),('CURVES', 'CURVES', 'CURVES')],
+            default = 'PARTICLE_SYSTEM'
             )
 
         FTressFXProps.eNumVertsPerStrand = bpy.props.EnumProperty(
@@ -285,6 +293,11 @@ class FTressFXProps(bpy.types.PropertyGroup):
             description="The export filename without extension",
             )
 
+        FTressFXProps.sParticleSystem = bpy.props.StringProperty(
+            name="Particle System", 
+            description="The particle system to export if export method is 'PARTICLE_SYSTEM'",
+            )
+
         bpy.types.Object.TressFXProps = bpy.props.PointerProperty(
             type=FTressFXProps, 
             name="TressFX Properties", 
@@ -308,6 +321,11 @@ class FTressFXPanel(bpy.types.Panel):
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = 'object'
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object is not None 
+
 
     def draw(self, context):
         layout = self.layout
@@ -380,6 +398,22 @@ class FTressFXPanel(bpy.types.Panel):
             LeftCol.label(text="Randomize Strands For LOD:")
             RightCol = RandomizeStrandsSplit.column()
             RightCol.prop(oTFXProps, "bRandomizeStrandsForLOD", text="")
+
+            #export type, particle system or selected curves
+            ExportTypeRow = MainBox.row()
+            ExportTypeSplit = ExportTypeRow.split(percentage=0.5)
+            LeftCol = ExportTypeSplit.column()
+            LeftCol.label(text="Export Type")
+            RightCol = ExportTypeSplit.column()
+            RightCol.prop(oTFXProps, "eExportType", text="")
+
+            if oTFXProps.eExportType is not None and oTFXProps.eExportType == 'PARTICLE_SYSTEM':
+                ParticleSystemRow = MainBox.row()
+                ParticlesystemSplit = ParticleSystemRow.split(percentage=0.5)
+                LeftCol = ParticlesystemSplit.column()
+                LeftCol.label(text="Partcle System")
+                RightCol = ParticlesystemSplit.column()
+                RightCol.prop_search(oTFXProps, "sParticleSystem", oTargetObject,"particle_systems")
 
             #export path label
             OutputPathRow = MainBox.row()
@@ -643,6 +677,18 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'WARNING'}, "Invalid num verts per strand!")
             return {'CANCELLED'}
 
+        if oTFXProps.eExportType == 'PARTICLE_SYSTEM':
+            self.eExportType = 'PARTICLE_SYSTEM'
+            print('     eExportType: PARTICLE_SYSTEM')
+            self.sParticleSystem = oTFXProps.sParticleSystem
+            if oTFXProps.sParticleSystem is None or (oTFXProps.sParticleSystem is not None and len(oTFXProps.sParticleSystem) < 1):
+                self.report({'WARNING'}, "Particle system was selected as export type, but no particle system was selected. Aborting.")
+                return {'CANCELLED'}
+            print('     sParticleSystem: ' + self.sParticleSystem)
+        else:
+            self.eExportType = 'CURVES'
+            print('     eExportType: CURVES')
+
         self.fMinCurvelength = oTFXProps.fMinimumCurveLength
         print('     fMinCurvlength: ' + str(self.fMinCurvelength))
         self.bBothEndsImmovable = oTFXProps.bBothEndsImmovable
@@ -670,37 +716,40 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'WARNING'}, "No armature found on base mesh. Aborting")
             return {'CANCELLED'}
 
-        #TODO option to use existing curves or particle system, gonna start with particle system only
-        ExportMethod = 'PARTICLE SYSTEM'
-
-        if ExportMethod == 'PARTICLE SYSTEM':
+        if self.eExportType == 'PARTICLE_SYSTEM':
             #convert particle system to mesh using convert modifier
             bpy.ops.object.select_all(action='DESELECT')
             bpy.context.scene.objects.active = self.oBaseMesh
 
+            bFound = False
             for mod in self.oBaseMesh.modifiers:
-                if mod.type == 'PARTICLE_SYSTEM':
-                    print("Converting particle system '" + mod.name + "' to mesh...")
+                if mod.type == 'PARTICLE_SYSTEM' and mod.particle_system.name == self.sParticleSystem:
+                    print("Converting particle system '" + mod.particle_system.name + "' to mesh...")
                     bpy.ops.object.modifier_convert(modifier=mod.name)
-                    #TODO have user select the particle system instead of just picking the
-                    # first one i come across
+                    bFound = True
                     break
-                    
-            #new mesh should already be selected
+
+            if bFound == False:
+                self.report({'WARNING'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
+                return {'CANCELLED'}
+
+            #new mesh should already be selected, convert it to curves
             bpy.ops.object.convert(target='CURVE')
+            #separate them into invidual curves
             SeparateCurves(context)
         else:
             print("using selected curves as strands")
 
         CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
         print(str(len(CurvesList)) + " curves found...")
+
         if len(CurvesList) < TRESSFX_SIM_THREAD_GROUP_SIZE:
             self.report({'WARNING'}, "Not enough curves found, at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
             return {'CANCELLED'}
         
         self.SaveTFXHairJsonFile(context, CurvesList)
 
-        if ExportMethod == 'PARTICLE SYSTEM':
+        if self.eExportType == 'PARTICLE_SYSTEM':
             # delete the potentially thousands of curves we generated
             print('Deleting ' + str(len(CurvesList)) + ' temporary curves...')
             bpy.ops.object.select_all(action='DESELECT')
