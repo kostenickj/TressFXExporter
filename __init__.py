@@ -30,17 +30,6 @@ import CurveSimplifier as simp
 TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 4
 TRESSFX_SIM_THREAD_GROUP_SIZE = 64
 
-class TressFXTFXFileHeader(ctypes.Structure):
-	_fields_ = [('version', ctypes.c_float),
-                ('numHairStrands', ctypes.c_uint),
-                ('numVerticesPerStrand', ctypes.c_uint),
-                ('offsetVertexPosition', ctypes.c_uint),
-                ('offsetStrandUV', ctypes.c_uint),
-                ('offsetVertexUV', ctypes.c_uint),
-                ('offsetStrandThickness', ctypes.c_uint),
-                ('offsetVertexColor', ctypes.c_uint),
-                ('reserved', ctypes.c_uint * 32)]
-
 class TressFX_Float4(ctypes.Structure):
 	_fields_ = [('x', ctypes.c_float),
                 ('y', ctypes.c_float),
@@ -77,77 +66,6 @@ def FindIndexOfClosestVector(Point, VecList):
             closest = VecList[i]
             index = i
     return index
-
-#__________________________________________________________________________
-# p0, p1, p2 are three vertices of a triangle and p is inside the triangle
-def ComputeBarycentricCoordinates(p0, p1, p2, p):
-	v0 = p1 - p0
-	v1 = p2 - p0
-	v2 = p - p0
-
-	v00 = v0 * v0
-	v01 = v0 * v1
-	v11 = v1 * v1
-	v20 = v2 * v0
-	v21 = v2 * v1
-	d = v00 * v11 - v01 * v01
-	v = (v11 * v20 - v01 * v21) / d # TODO: Do I need to care about divide-by-zero case?
-	w = (v00 * v21 - v01 * v20) / d
-	u = 1.0 - v - w
-
-	# make sure u, v, w are non-negative. It could happen sometimes.
-	u = max(u, 0)
-	v = max(v, 0)
-	w = max(w, 0)
-
-	# normalize barycentric coordinates so that their sum is equal to 1
-	sum = u + v + w
-	u /= sum
-	v /= sum
-	w /= sum
-
-	return [u, v, w]
-
-# vertexIndices is three vertex indices belong to one triangle
-def GetSortedWeightsFromTriangleVertices(_maxJointsPerVertex, vertexIndices, jointIndexArray, weightArray, baryCoord):
-	final_pairs = []
-
-	for j in range(_maxJointsPerVertex):
-		for i in range(3):
-			vertex_index = vertexIndices[i]
-			bary = baryCoord[i]
-
-			weight = weightArray[vertex_index*_maxJointsPerVertex + j] * bary
-			joint_index = jointIndexArray[vertex_index*_maxJointsPerVertex + j]
-
-			bFound = False
-			for k in range(len(final_pairs)):
-				if final_pairs[k].joint_index == joint_index:
-					final_pairs[k].weight += weight
-					bFound = True
-					break
-
-			if bFound == False:
-				pair = WeightJointIndexPair()
-				pair.weight = weight
-				pair.joint_index = joint_index
-				final_pairs.append(pair)
-
-	# Set joint index zero if the weight is zero. 
-	for i in range(len(final_pairs)):
-		if final_pairs[i].weight == 0:
-			final_pairs[i].joint_index = 0
-
-	final_pairs.sort()
-
-	# TODO: Is it needed to make the sum of weight equal to 1? 
-
-	# for i in range(len(final_pairs)):
-		# print '%d final_pairs.weight:%f final_pairs.joint_index:%d' % (i, final_pairs[i].weight, final_pairs[i].joint_index)
-
-	# number of elements of final_pairs could be more than _maxJointsPerVertex but it should be at least _maxJointsPerVertex. 
-	# If you really want it to be exactly _maxJointsPerVertex, you can try to pop out elements. 
-	return final_pairs     
 
 # takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum
 def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
@@ -210,9 +128,6 @@ def OnTressFXCollisionMeshChange(self, context):
             print("Invalid collision Mesh selected.")
         else:
             print("new collision mesh set: " + oCollisionMesh.name)
-            
-            
-
 
 '''      
 # ----------------------------------------
@@ -242,6 +157,17 @@ class FTressFXProps(bpy.types.PropertyGroup):
             description='Export method, uses either particle system or selected curves',
             items=[('PARTICLE_SYSTEM', 'PARTICLE_SYSTEM', 'PARTICLE_SYSTEM'),('CURVES', 'CURVES', 'CURVES')],
             default = 'PARTICLE_SYSTEM'
+            )
+
+        FTressFXProps.eBoneExportMode = bpy.props.EnumProperty(
+            name='Bone Export Mode',
+            description='ALL_WITH_WEIGHT: exports all found bones that have weight. Blacklist: ignore these bones. Whitelist: only these bones ',
+            items=[
+                ('ALL_WITH_WEIGHT', 'ALL_WITH_WEIGHT', 'ALL_WITH_WEIGHT'),
+                ('BLACKLIST', 'BLACKLIST', 'BLACKLIST'),
+                ('WHITELIST', 'WHITELIST', 'WHITELIST')
+            ],
+            default = 'ALL_WITH_WEIGHT'
             )
 
         FTressFXProps.eNumVertsPerStrand = bpy.props.EnumProperty(
@@ -413,7 +339,7 @@ class FTressFXPanel(bpy.types.Panel):
                 LeftCol = ParticlesystemSplit.column()
                 LeftCol.label(text="Partcle System")
                 RightCol = ParticlesystemSplit.column()
-                RightCol.prop_search(oTFXProps, "sParticleSystem", oTargetObject,"particle_systems")
+                RightCol.prop_search(oTFXProps, "sParticleSystem", oTargetObject,"particle_systems", text="")
 
             #export path label
             OutputPathRow = MainBox.row()
@@ -494,6 +420,10 @@ class FTressFXExport(bpy.types.Operator):
     def SaveTFXHairJsonFile(self, context, lHairs):
         
         nNumCurves = len(lHairs)
+
+        if self.bRandomizeStrandsForLOD:
+            random.shuffle(lHairs)
+
         RootPositions = []
         
         OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
