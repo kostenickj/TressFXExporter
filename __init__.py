@@ -123,7 +123,9 @@ def OnBoneSelect(self, context):
         if boneName in armature.data.bones:
             item = self.ExportBones.add()
             item.sBoneName = boneName
-            self.dummyBoneStr = ''
+    #protect against infinite recursion
+    if self.dummyBoneStr != '':
+        self.dummyBoneStr = ''
 
 def OnTressFXCollisionMeshChange(self, context):
     #NOTE: self is FTressFXProps instance
@@ -151,14 +153,14 @@ class TressFXBonesRemoveDuplicates(bpy.types.Operator):
     bl_description = "Remove all duplicates"
     bl_options = {'INTERNAL'}
 
-    def find_duplicates(self, context):
+    def FindDuplicates(self, context):
         """find all duplicates by name"""
-        name_lookup = {}
+        NameLookup = {}
 
-        for c, i in enumerate(context.active_object.TressFXProps.ExportBones):
-            name_lookup.setdefault(i.sBoneName, []).append(c)
+        for c, TressFXBonePropsInstance in enumerate(context.active_object.TressFXProps.ExportBones):
+            NameLookup.setdefault(TressFXBonePropsInstance.sBoneName, []).append(c)
         duplicates = set()
-        for name, indices in name_lookup.items():
+        for name, indices in NameLookup.items():
             for i in indices[1:]:
                 duplicates.add(i)
         return sorted(list(duplicates))
@@ -169,15 +171,15 @@ class TressFXBonesRemoveDuplicates(bpy.types.Operator):
         
     def execute(self, context):
 
-        obj = context.active_object.TressFXProps
-        removed_items = []
+        OtfxProps = context.active_object.TressFXProps
+        RemovedItems = []
         # Reverse the list before removing the items
-        for i in self.find_duplicates(context)[::-1]:
-            obj.ExportBones.remove(i)
-            removed_items.append(i)
-        if removed_items:
-            obj.ExportBonesIndex = len(obj.ExportBones)-1
-            info = ', '.join(map(str, removed_items))
+        for i in self.FindDuplicates(context)[::-1]:
+            OtfxProps.ExportBones.remove(i)
+            RemovedItems.append(i)
+        if RemovedItems:
+            OtfxProps.ExportBonesIndex = len(OtfxProps.ExportBones)-1
+            info = ', '.join(map(str, RemovedItems))
             self.report({'INFO'}, "Removed indices: %s" % (info))
         else:
             self.report({'INFO'}, "No duplicates")
@@ -259,11 +261,8 @@ class TressFXBoneListItemsActions(bpy.types.Operator):
 class TressFXBoneListItems(bpy.types.UIList):
     
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        obj = item
-        custom_icon = "BONE_DATA"
-        #split = layout.split(0.3)
-    #    split.label("Index: %d" % (index))
-        layout.prop(obj, 'sBoneName', text="", emboss=False, translate=False)
+        obj = item # item is a FTressFXBoneProps instance
+        layout.prop(obj, 'sBoneName', text="", emboss=False, translate=False, icon="BONE_DATA")
             
     def invoke(self, context, event):
         pass
@@ -368,10 +367,11 @@ class FTressFXProps(bpy.types.PropertyGroup):
             )
 
         FTressFXProps.dummyBoneStr = bpy.props.StringProperty(
-            name="todo", 
-            description="todo",
+            name="Select Bone", 
+            description="Select a bone to add",
             update = OnBoneSelect
             )
+
         FTressFXProps.ExportBones = bpy.props.CollectionProperty( type= FTressFXBoneProps)
         FTressFXProps.ExportBonesIndex = bpy.props.IntProperty()
 
@@ -503,7 +503,11 @@ class FTressFXPanel(bpy.types.Panel):
                 
                 #bone picker
                 BonePickerRow = MainBox.row()
-                BonePickerRow.prop_search(oTFXProps, "dummyBoneStr", oTargetObject.parent.data ,"bones", text="")
+                BonePickersplit = BonePickerRow.split(percentage=0.5)
+                BonePickerLabel = BonePickersplit.column()
+                BonePickerLabel.label(text="Pick bones")
+                BonePickerDrop = BonePickersplit.column()
+                BonePickerDrop.prop_search(oTFXProps, "dummyBoneStr", oTargetObject.parent.data ,"bones", text="")
                 
                 #bone list display
                 BoneListRow = MainBox.row()
@@ -514,6 +518,7 @@ class FTressFXPanel(bpy.types.Panel):
                 col.operator("tressfxbones.list_action", icon='TRIA_UP', text="").action = 'UP'
                 col.operator("tressfxbones.list_action", icon='TRIA_DOWN', text="").action = 'DOWN'
                 
+                #clear and remove dupes buttons
                 SpecialRow = MainBox.row()
                 SpecialSplit = SpecialRow.split(percentage=0.5)
                 leftcol = SpecialSplit.column()
@@ -700,7 +705,11 @@ class FTressFXExport(bpy.types.Operator):
             FinalObj['uvs'].append(uvObj)
         #enumerate(RootPositions) END
 
-        FinalObj['tfxBoneData'] = self.getTFXBoneJSON(context, RootPositions)
+        boneData = self.getTFXBoneJSON(context, RootPositions)
+        if boneData != 'ERROR':
+            FinalObj['tfxBoneData'] = self.getTFXBoneJSON(context, RootPositions)
+        else:
+            return 'ERROR'
 
         with open(OutFilePath, "w") as TfxFile :
             TfxFile.write(json.dumps(FinalObj, indent=4))
@@ -716,10 +725,18 @@ class FTressFXExport(bpy.types.Operator):
 
         Armature = self.oBaseMesh.parent
 
-        # TODO user can select bones/vertex groups to ignore when exporting
+        ExportBonesNames = [j.sBoneName for j in self.ExportBones]
+
         for bn in Armature.data.bones:
             if bn.name in VertexGroupNames:
-                AllBonesArray.append(bn)
+                if self.eBoneExportMode == 'WHITELIST':
+                    if bn.name in ExportBonesNames:
+                        AllBonesArray.append(bn)
+                elif self.eBoneExportMode == 'BLACKLIST':
+                    if bn.name not in ExportBonesNames:
+                        AllBonesArray.append(bn)
+                else:
+                    AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
 
         for RootIndex, RootPoint in enumerate(RootPositions):
             pVector = mathutils.Vector((RootPoint[0],RootPoint[1],RootPoint[2]))
@@ -747,6 +764,10 @@ class FTressFXExport(bpy.types.Operator):
                             BonesArray_WithWeightsOnly.append(Bone.name)
             
             ClosestVertWeights.sort()
+
+            if len(ClosestVertWeights) < 1:
+                self.report({'ERROR'}, "No weights found for at least one root position! Make sure to whitelist or blacklist bones! Or use all with weight.")
+                return 'ERROR'
             #make sure we have at least 4
             while len(ClosestVertWeights) < TRESSFX_MAX_INFLUENTIAL_BONE_COUNT :
                 ClosestVertWeights.append(BoneweightmapObj())
@@ -798,6 +819,19 @@ class FTressFXExport(bpy.types.Operator):
         else:
             self.eExportType = 'CURVES'
             print('     eExportType: CURVES')
+
+        self.eBoneExportMode = oTFXProps.eBoneExportMode
+        self.ExportBones = oTFXProps.ExportBones
+        
+        if oTFXProps.eBoneExportMode != 'ALL_WITH_WEIGHT':
+            if self.ExportBones is None or (self.ExportBones is not None and len(self.ExportBones) < 1):
+                self.report({'WARNING'}, "Export mode was either BLACKLIST or WHITELIST, but no bones were found. Aborting.")
+                return {'CANCELLED'}
+
+        print('     Selected Bones: ')
+        for b in self.ExportBones:
+            print('         ' + b.sBoneName)
+        print('     eBoneExportMode: ' +  self.eBoneExportMode)
 
         self.fMinCurvelength = oTFXProps.fMinimumCurveLength
         print('     fMinCurvlength: ' + str(self.fMinCurvelength))
@@ -857,7 +891,9 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'WARNING'}, "Not enough curves found, at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
             return {'CANCELLED'}
         
-        self.SaveTFXHairJsonFile(context, CurvesList)
+        success = self.SaveTFXHairJsonFile(context, CurvesList)
+        if success == 'ERROR':
+            return {'CANCELLED'}
 
         if self.eExportType == 'PARTICLE_SYSTEM':
             # delete the potentially thousands of curves we generated
