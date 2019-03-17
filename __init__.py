@@ -320,7 +320,7 @@ class FTressFXProps(bpy.types.PropertyGroup):
             )
 
         FTressFXProps.fMinimumCurveLength = bpy.props.FloatProperty(
-            name='',
+            name='Mininum Curve length in blender units',
             description='Minimum curve length is to filter out hair shorter than the input length. In some case, it is hard to get rid of short hair using modeling tool. This option will be handy in that case. If it is set to zero, then there will be no filtering. ',
             min = 0,
             soft_min = 0,
@@ -603,36 +603,42 @@ class FTressFXExport(bpy.types.Operator):
         return context.active_object is not None
 
     def GetCurveLength(self, context, curveObj):
-        bpy.context.scene.objects.active = curveObj
-        bpy.ops.object.duplicate_move()
-        # the duplicate is active, apply all transforms to get global coordinates
-        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-        bpy.ops.object.convert(target='MESH', keep_original=False)
-        _data = context.active_object.data
-        edge_length = 0
-        for edge in _data.edges:
-            vert0 = _data.vertices[edge.vertices[0]].co
-            vert1 = _data.vertices[edge.vertices[1]].co
-            edge_length += (vert0-vert1).length
-        # deal with trailing float smear
-        edge_lengthFormatted = '{:.6f}'.format(edge_length)
-        bpy.ops.object.delete()
-        return edge_length
+
+        curvePoints = [p.co for p in curveObj.data.splines[0].points]
+        length = 0
+
+        for x in range( (len(curvePoints) - 1)):
+            vert0 = curvePoints[x]
+            vert1 = curvePoints[x + 1]
+            length += (vert0-vert1).length
+        return length
 
     def SaveTFXHairJsonFile(self, context, lHairs):
-        
-      
-        #todo, test this part... mincurvelenth
-        for curve in lHairs:
-            CurveLength = self.GetCurveLength(context, curve)
-            edge_lengthFormatted = '{:.6f}'.format(edge_length)
-            print(edge_lengthFormatted)
+
+        curvesToUse = []
+        # account for minnum curve length
+        if self.fMinCurvelength > 0:
+
+            for idx, curve in enumerate(lHairs):
+                CurveLength = self.GetCurveLength(context, curve)
+                CurveLength_lengthFormatted = '{:.6f}'.format(CurveLength)
+                if CurveLength >= self.fMinCurvelength:
+                    curvesToUse.append(curve)
+                    print('curve idx ' + str(idx) + ' length: ' + CurveLength_lengthFormatted)
+                else:
+                    print('dicarding curve with index ' + str(idx) + ' length: ' + CurveLength_lengthFormatted) 
+        else:
+            curvesToUse = lHairs
+
+        if len(curvesToUse) < TRESSFX_SIM_THREAD_GROUP_SIZE:
+            self.report({'ERROR'}, "Not enough curves found after accounting for Min Curve Length! at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
+            return 'ERROR'
 
         if self.bRandomizeStrandsForLOD:
-            random.shuffle(lHairs)
+            random.shuffle(curvesToUse)
 
         RootPositions = []
-        nNumCurves = len(lHairs)
+        nNumCurves = len(curvesToUse)
         
         OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
         print(OutFilePath)
@@ -643,7 +649,7 @@ class FTressFXExport(bpy.types.Operator):
         FinalObj['numHairStrands'] = nNumCurves
         FinalObj['numVerticesPerStrand'] = self.nNumVertsPerStrand
 
-        for nHairIdx, CurveObj in enumerate(lHairs):
+        for nHairIdx, CurveObj in enumerate(curvesToUse):
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
@@ -690,7 +696,7 @@ class FTressFXExport(bpy.types.Operator):
             # How do i know which point is the start of the curve?
             # for now im assuming its 0, not the end
             RootPositions.append(CurvePoints[0])
-        # enumerate(lHairs) END
+        # enumerate(curvesToUse) END
         
         # get strand texture coords
         for nPtIdx, Point in enumerate(RootPositions):
@@ -821,14 +827,14 @@ class FTressFXExport(bpy.types.Operator):
             self.oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
             print('     Base Mesh: ' + self.oBaseMesh.name)
         else:
-            self.report({'WARNING'}, "Base mesh not found!")
+            self.report({'ERROR'}, "Base mesh not found!")
             return {'CANCELLED'}
 
         if oTFXProps.eNumVertsPerStrand is not None:
             self.nNumVertsPerStrand = int(oTFXProps.eNumVertsPerStrand)
             print('     nNumVertsPerStrand: ' + str(self.nNumVertsPerStrand))
         else:
-            self.report({'WARNING'}, "Invalid num verts per strand!")
+            self.report({'ERROR'}, "Invalid num verts per strand!")
             return {'CANCELLED'}
 
         if oTFXProps.eExportType == 'PARTICLE_SYSTEM':
@@ -836,7 +842,7 @@ class FTressFXExport(bpy.types.Operator):
             print('     eExportType: PARTICLE_SYSTEM')
             self.sParticleSystem = oTFXProps.sParticleSystem
             if oTFXProps.sParticleSystem is None or (oTFXProps.sParticleSystem is not None and len(oTFXProps.sParticleSystem) < 1):
-                self.report({'WARNING'}, "Particle system was selected as export type, but no particle system was selected. Aborting.")
+                self.report({'ERROR'}, "Particle system was selected as export type, but no particle system was selected. Aborting.")
                 return {'CANCELLED'}
             print('     sParticleSystem: ' + self.sParticleSystem)
         else:
@@ -848,7 +854,7 @@ class FTressFXExport(bpy.types.Operator):
         
         if oTFXProps.eBoneExportMode != 'ALL_WITH_WEIGHT':
             if self.ExportBones is None or (self.ExportBones is not None and len(self.ExportBones) < 1):
-                self.report({'WARNING'}, "Export mode was either BLACKLIST or WHITELIST, but no bones were found. Aborting.")
+                self.report({'ERROR'}, "Export mode was either BLACKLIST or WHITELIST, but no bones were found. Aborting.")
                 return {'CANCELLED'}
 
         print('     Selected Bones: ')
@@ -872,15 +878,15 @@ class FTressFXExport(bpy.types.Operator):
         print('     sOutputName: ' + str(self.sOutputName))
 
         if len(self.sOutputDir) < 1:
-            self.report({'WARNING'}, "Output directory not set. Aborting.")
+            self.report({'ERROR'}, "Output directory not set. Aborting.")
             return {'CANCELLED'}
 
         if self.oBaseMesh.data.uv_layers.active is None:
-            self.report({'WARNING'}, "No UV's found on base mesh. Aborting")
+            self.report({'ERROR'}, "No UV's found on base mesh. Aborting")
             return {'CANCELLED'}
 
         if self.oBaseMesh.parent.type != 'ARMATURE':
-            self.report({'WARNING'}, "No armature found on base mesh. Aborting")
+            self.report({'ERROR'}, "No armature found on base mesh. Aborting")
             return {'CANCELLED'}
 
         if self.eExportType == 'PARTICLE_SYSTEM':
@@ -897,7 +903,7 @@ class FTressFXExport(bpy.types.Operator):
                     break
 
             if bFound == False:
-                self.report({'WARNING'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
+                self.report({'ERROR'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
                 return {'CANCELLED'}
 
             #new mesh should already be selected, convert it to curves
@@ -905,13 +911,13 @@ class FTressFXExport(bpy.types.Operator):
             #separate them into invidual curves
             SeparateCurves(context)
         else:
-            print("using selected curves as strands")
+            print("using selected curves as strands. Assuming they are already sperated into individual curve objects.")
 
         CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
         print(str(len(CurvesList)) + " curves found...")
 
         if len(CurvesList) < TRESSFX_SIM_THREAD_GROUP_SIZE:
-            self.report({'WARNING'}, "Not enough curves found, at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
+            self.report({'ERROR'}, "Not enough curves found, at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
             return {'CANCELLED'}
         
         success = self.SaveTFXHairJsonFile(context, CurvesList)
