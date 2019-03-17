@@ -602,14 +602,37 @@ class FTressFXExport(bpy.types.Operator):
     def poll(cls, context):
         return context.active_object is not None
 
+    def GetCurveLength(self, context, curveObj):
+        bpy.context.scene.objects.active = curveObj
+        bpy.ops.object.duplicate_move()
+        # the duplicate is active, apply all transforms to get global coordinates
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+        bpy.ops.object.convert(target='MESH', keep_original=False)
+        _data = context.active_object.data
+        edge_length = 0
+        for edge in _data.edges:
+            vert0 = _data.vertices[edge.vertices[0]].co
+            vert1 = _data.vertices[edge.vertices[1]].co
+            edge_length += (vert0-vert1).length
+        # deal with trailing float smear
+        edge_lengthFormatted = '{:.6f}'.format(edge_length)
+        bpy.ops.object.delete()
+        return edge_length
+
     def SaveTFXHairJsonFile(self, context, lHairs):
         
-        nNumCurves = len(lHairs)
+      
+        #todo, test this part... mincurvelenth
+        for curve in lHairs:
+            CurveLength = self.GetCurveLength(context, curve)
+            edge_lengthFormatted = '{:.6f}'.format(edge_length)
+            print(edge_lengthFormatted)
 
         if self.bRandomizeStrandsForLOD:
             random.shuffle(lHairs)
 
         RootPositions = []
+        nNumCurves = len(lHairs)
         
         OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
         print(OutFilePath)
