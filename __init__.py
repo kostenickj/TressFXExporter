@@ -103,7 +103,6 @@ def SeparateCurves(context):
 
 def OnTressFXBaseMeshChange(self, context):
     #NOTE: self is FTressFXProps instance
-    oWM = context.window_manager
     print("Base Mesh Change")
 
     if self.sBaseMesh in bpy.data.objects:
@@ -115,9 +114,19 @@ def OnTressFXBaseMeshChange(self, context):
         else:
             print("new mesh set: " + oBaseMesh.name)
 
+def OnBoneSelect(self, context):
+    #NOTE: self is FTressFXProps instance
+    boneName = self.dummyBoneStr
+    if self.sBaseMesh and self.sBaseMesh in bpy.data.objects:
+        oBaseMesh = bpy.data.objects[self.sBaseMesh]
+        armature = oBaseMesh.parent
+        if boneName in armature.data.bones:
+            item = self.ExportBones.add()
+            item.sBoneName = boneName
+            self.dummyBoneStr = ''
+
 def OnTressFXCollisionMeshChange(self, context):
     #NOTE: self is FTressFXProps instance
-    oWM = context.window_manager
     print("Collision Mesh Change")
 
     if self.sCollisionMesh in bpy.data.objects:
@@ -134,6 +143,140 @@ def OnTressFXCollisionMeshChange(self, context):
 # Property definitions
 # ----------------------------------------
 '''
+
+class TressFXBonesRemoveDuplicates(bpy.types.Operator):
+    """Remove all duplicates"""
+    bl_idname = "tressfxbones.remove_duplicates"
+    bl_label = "Remove Duplicates"
+    bl_description = "Remove all duplicates"
+    bl_options = {'INTERNAL'}
+
+    def find_duplicates(self, context):
+        """find all duplicates by name"""
+        name_lookup = {}
+
+        for c, i in enumerate(context.active_object.TressFXProps.ExportBones):
+            name_lookup.setdefault(i.sBoneName, []).append(c)
+        duplicates = set()
+        for name, indices in name_lookup.items():
+            for i in indices[1:]:
+                duplicates.add(i)
+        return sorted(list(duplicates))
+        
+    @classmethod
+    def poll(cls, context):
+        return bool(context.active_object.TressFXProps)
+        
+    def execute(self, context):
+
+        obj = context.active_object.TressFXProps
+        removed_items = []
+        # Reverse the list before removing the items
+        for i in self.find_duplicates(context)[::-1]:
+            obj.ExportBones.remove(i)
+            removed_items.append(i)
+        if removed_items:
+            obj.ExportBonesIndex = len(obj.ExportBones)-1
+            info = ', '.join(map(str, removed_items))
+            self.report({'INFO'}, "Removed indices: %s" % (info))
+        else:
+            self.report({'INFO'}, "No duplicates")
+        return{'FINISHED'}
+    
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+class TressFXBonesClearList(bpy.types.Operator):
+    """Clear all items of the list"""
+    bl_idname = "tressfxbones.clear_list"
+    bl_label = "Clear List"
+    bl_description = "Clear all items of the list"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.active_object.TressFXProps)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+        
+    def execute(self, context):
+        if bool(context.active_object.TressFXProps):
+            context.active_object.TressFXProps.ExportBones.clear()
+            self.report({'INFO'}, "All items removed")
+        else:
+            self.report({'INFO'}, "Nothing to remove")
+        return{'FINISHED'}
+
+
+class TressFXBoneListItemsActions(bpy.types.Operator):
+    """Move items up and down, add and remove"""
+    bl_idname = "tressfxbones.list_action"
+    bl_label = "List Actions"
+    bl_description = "Move items up and down, and remove"
+    bl_options = {'REGISTER'}
+    
+    action = bpy.props.EnumProperty(
+        items=(
+            ('UP', "Up", ""),
+            ('DOWN', "Down", ""),
+            ('REMOVE', "Remove", "")
+            )
+        )
+
+    def invoke(self, context, event):
+
+        oTfxProps = context.active_object.TressFXProps
+        idx = oTfxProps.ExportBonesIndex
+
+        try:
+            item = oTfxProps.ExportBones[idx]
+        except IndexError:
+            pass
+        else:
+            if self.action == 'DOWN' and idx < len(oTfxProps.ExportBones) - 1:
+                item_next = oTfxProps.ExportBones[idx+1].sBoneName
+                oTfxProps.ExportBones.move(idx, idx+1)
+                oTfxProps.ExportBonesIndex += 1
+                info = 'Item "%s" moved to position %d' % (item.sBoneName, oTfxProps.ExportBonesIndex + 1)
+                self.report({'INFO'}, info)
+
+            elif self.action == 'UP' and idx >= 1:
+                item_prev = oTfxProps.ExportBones[idx-1].sBoneName
+                oTfxProps.ExportBones.move(idx, idx-1)
+                oTfxProps.ExportBonesIndex -= 1
+                info = 'Item "%s" moved to position %d' % (item.sBoneName, oTfxProps.ExportBonesIndex + 1)
+                self.report({'INFO'}, info)
+
+            elif self.action == 'REMOVE':
+                info = 'Item "%s" removed from list' % (oTfxProps.ExportBones[idx].sBoneName)
+                oTfxProps.ExportBonesIndex -= 1
+                oTfxProps.ExportBones.remove(idx)
+                self.report({'INFO'}, info)
+                
+        return {"FINISHED"}
+
+class TressFXBoneListItems(bpy.types.UIList):
+    
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        obj = item
+        custom_icon = "BONE_DATA"
+        #split = layout.split(0.3)
+    #    split.label("Index: %d" % (index))
+        layout.prop(obj, 'sBoneName', text="", emboss=False, translate=False)
+            
+    def invoke(self, context, event):
+        pass
+
+class FTressFXBoneProps(bpy.types.PropertyGroup):
+    
+    @classmethod
+    def register(FTressFXBoneProps):
+        print('here')
+        FTressFXBoneProps.sBoneName = bpy.props.StringProperty(
+            name="Bone Name", 
+            description="Bone Name"
+        )
    
 class FTressFXProps(bpy.types.PropertyGroup):
     
@@ -224,6 +367,14 @@ class FTressFXProps(bpy.types.PropertyGroup):
             description="The particle system to export if export method is 'PARTICLE_SYSTEM'",
             )
 
+        FTressFXProps.dummyBoneStr = bpy.props.StringProperty(
+            name="todo", 
+            description="todo",
+            update = OnBoneSelect
+            )
+        FTressFXProps.ExportBones = bpy.props.CollectionProperty( type= FTressFXBoneProps)
+        FTressFXProps.ExportBonesIndex = bpy.props.IntProperty()
+
         bpy.types.Object.TressFXProps = bpy.props.PointerProperty(
             type=FTressFXProps, 
             name="TressFX Properties", 
@@ -233,7 +384,6 @@ class FTressFXProps(bpy.types.PropertyGroup):
     @classmethod
     def unregister(cls):
         del bpy.types.Object.TressFXProps
-
 
 '''      
 # ----------------------------------------
@@ -340,6 +490,36 @@ class FTressFXPanel(bpy.types.Panel):
                 LeftCol.label(text="Partcle System")
                 RightCol = ParticlesystemSplit.column()
                 RightCol.prop_search(oTFXProps, "sParticleSystem", oTargetObject,"particle_systems", text="")
+
+            BoneExportTypeRow = MainBox.row()
+            BoneExportTypeSplit = BoneExportTypeRow.split(percentage=0.5)
+            LeftCol = BoneExportTypeSplit.column()
+            LeftCol.label(text="Bone Mode")
+            RightCol = BoneExportTypeSplit.column()
+            RightCol.prop(oTFXProps, "eBoneExportMode", text="")
+
+
+            if oTFXProps.eBoneExportMode != 'ALL_WITH_WEIGHT' and oTargetObject.parent is not None and oTargetObject.parent.type == 'ARMATURE':
+                
+                #bone picker
+                BonePickerRow = MainBox.row()
+                BonePickerRow.prop_search(oTFXProps, "dummyBoneStr", oTargetObject.parent.data ,"bones", text="")
+                
+                #bone list display
+                BoneListRow = MainBox.row()
+                BoneListRow.template_list("TressFXBoneListItems", "", oTFXProps, "ExportBones", oTFXProps, "ExportBonesIndex", rows=2)
+                col = BoneListRow.column(align=True)
+                col.operator("tressfxbones.list_action", icon='ZOOMOUT', text="").action = 'REMOVE'
+                col.separator()
+                col.operator("tressfxbones.list_action", icon='TRIA_UP', text="").action = 'UP'
+                col.operator("tressfxbones.list_action", icon='TRIA_DOWN', text="").action = 'DOWN'
+                
+                SpecialRow = MainBox.row()
+                SpecialSplit = SpecialRow.split(percentage=0.5)
+                leftcol = SpecialSplit.column()
+                rightcol = SpecialSplit.column()
+                leftcol.operator("tressfxbones.clear_list", icon="X")
+                leftcol.operator("tressfxbones.remove_duplicates", icon="GHOST")
 
             #export path label
             OutputPathRow = MainBox.row()
@@ -717,20 +897,28 @@ class FDirectorySelector(bpy.types.Operator, ExportHelper):
         # Tells Blender to hang on for the slow user input
         return {'RUNNING_MODAL'}
 
+classes = (
+    FTressFXBoneProps,
+    TressFXBoneListItems,
+    FDirectorySelector,
+    FTressFXExport,
+    FTressFXCollisionExport,
+    FTressFXPanel,
+    FTressFXProps,
+    TressFXBoneListItemsActions,
+    TressFXBonesClearList,
+    TressFXBonesRemoveDuplicates
+)
 
 def register():
-    bpy.utils.register_class(FDirectorySelector)
-    bpy.utils.register_class(FTressFXExport)
-    bpy.utils.register_class(FTressFXCollisionExport)
-    bpy.utils.register_class(FTressFXPanel)
-    bpy.utils.register_class(FTressFXProps)
+    from bpy.utils import register_class
+    for clss in classes:
+        register_class(clss)
 
 def unregister():
-    bpy.utils.unregister_class(FDirectorySelector)
-    bpy.utils.unregister_class(FTressFXExport)
-    bpy.utils.unregister_class(FTressFXCollisionExport)
-    bpy.utils.unregister_class(FTressFXPanel)
-    bpy.utils.unregister_class(FTressFXProps)
+    from bpy.utils import unregister_class
+    for clss in reversed(classes):
+        unregister_class(clss)
 
 
 if __name__ == "__main__":
