@@ -760,12 +760,15 @@ class FTressFXExport(bpy.types.Operator):
             if bn.name in VertexGroupNames:
                 if self.eBoneExportMode == 'WHITELIST':
                     if bn.name in ExportBonesNames:
-                        AllBonesArray.append(bn)
+                        if bn.use_deform:
+                            AllBonesArray.append(bn)
                 elif self.eBoneExportMode == 'BLACKLIST':
                     if bn.name not in ExportBonesNames:
-                        AllBonesArray.append(bn)
+                        if bn.use_deform:
+                            AllBonesArray.append(bn)
                 else:
-                    AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
+                    if bn.use_deform:
+                        AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
 
         for RootIndex, RootPoint in enumerate(RootPositions):
             pVector = mathutils.Vector((RootPoint[0],RootPoint[1],RootPoint[2]))
@@ -780,17 +783,33 @@ class FTressFXExport(bpy.types.Operator):
 
             ClosestVertWeights = []
 
-            for g in ClosestVert.groups:
-                # NOTE: g.group is bone index
-                for Bone in AllBonesArray:
-                    if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
+            for Bone in AllBonesArray:
+                weight = -1
+                try:
+                    weight = self.oBaseMesh.vertex_groups[Bone.name].weight(ClosestVert.index)                    
+                except:
+                    print('vertex index ' + str(ClosestVert.index) + ' is not weighted to ' + Bone.name )
+                    pass
 
-                        boneweightmapObj = BoneweightmapObj()
-                        boneweightmapObj.boneName = Bone.name
-                        boneweightmapObj.weight = g.weight
-                        ClosestVertWeights.append( boneweightmapObj )
-                        if Bone.name not in BonesArray_WithWeightsOnly:
-                            BonesArray_WithWeightsOnly.append(Bone.name)
+                if weight > 0 :
+                    boneweightmapObj = BoneweightmapObj()
+                    boneweightmapObj.boneName = Bone.name
+                    boneweightmapObj.weight = weight
+                    ClosestVertWeights.append( boneweightmapObj )
+                    if Bone.name not in BonesArray_WithWeightsOnly:
+                        BonesArray_WithWeightsOnly.append(Bone.name)
+
+            # for g in ClosestVert.groups:
+            #     # NOTE: g.group is bone index
+            #     for Bone in AllBonesArray:
+            #         if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
+
+            #             boneweightmapObj = BoneweightmapObj()
+            #             boneweightmapObj.boneName = Bone.name
+            #             boneweightmapObj.weight = g.weight
+            #             ClosestVertWeights.append( boneweightmapObj )
+            #             if Bone.name not in BonesArray_WithWeightsOnly:
+            #                 BonesArray_WithWeightsOnly.append(Bone.name)
             
             ClosestVertWeights.sort()
 
@@ -801,7 +820,11 @@ class FTressFXExport(bpy.types.Operator):
             while len(ClosestVertWeights) < TRESSFX_MAX_INFLUENTIAL_BONE_COUNT :
                 ClosestVertWeights.append(BoneweightmapObj())
 
-            for boneweightmapObj in ClosestVertWeights:
+            print('root index: ' + str(RootIndex))
+            for idx in range( TRESSFX_MAX_INFLUENTIAL_BONE_COUNT):
+                boneweightmapObj = ClosestVertWeights[idx]
+                print( boneweightmapObj.boneName )
+                print( '    weight: ' + '{:.6f}'.format(boneweightmapObj.weight))
                 j = {}
                 j['weight'] = boneweightmapObj.weight
                 j['boneName'] = boneweightmapObj.boneName
