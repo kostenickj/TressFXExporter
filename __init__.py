@@ -850,6 +850,7 @@ class FTressFXExport(bpy.types.Operator):
             print('     eExportType: CURVES')
 
         self.eBoneExportMode = oTFXProps.eBoneExportMode
+        print('     eBoneExportMode: ' + self.eBoneExportMode)
         self.ExportBones = oTFXProps.ExportBones
         
         if oTFXProps.eBoneExportMode != 'ALL_WITH_WEIGHT':
