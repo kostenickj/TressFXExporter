@@ -798,18 +798,6 @@ class FTressFXExport(bpy.types.Operator):
                     ClosestVertWeights.append( boneweightmapObj )
                     if Bone.name not in BonesArray_WithWeightsOnly:
                         BonesArray_WithWeightsOnly.append(Bone.name)
-
-            # for g in ClosestVert.groups:
-            #     # NOTE: g.group is bone index
-            #     for Bone in AllBonesArray:
-            #         if g.group == self.oBaseMesh.vertex_groups[Bone.name].index and g.weight > 0 :
-
-            #             boneweightmapObj = BoneweightmapObj()
-            #             boneweightmapObj.boneName = Bone.name
-            #             boneweightmapObj.weight = g.weight
-            #             ClosestVertWeights.append( boneweightmapObj )
-            #             if Bone.name not in BonesArray_WithWeightsOnly:
-            #                 BonesArray_WithWeightsOnly.append(Bone.name)
             
             ClosestVertWeights.sort()
 
