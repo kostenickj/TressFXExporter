@@ -43,6 +43,7 @@ class TressFX_Float2(ctypes.Structure):
 class BoneweightmapObj:
     weight = 0.0
     boneName= ""
+    sourceVertIndex = -1
     # For sorting 
     def __lt__(self, other):
         return self.weight > other.weight
@@ -54,6 +55,48 @@ class WeightJointIndexPair:
 	# For sorting 
 	def __lt__(self, other):
 		return self.weight > other.weight
+
+#this assumes all faces of the object are pointing outwards
+def is_inside2(p, obj, max_dist = 1.84467e+19):
+
+    point, normal, face = obj.closest_point_on_mesh(p, max_dist)
+    p2 = point-p
+    v = p2.dot(normal)
+    print(v)
+    return not(v < 0.0)
+
+def is_inside(ray_origin, ray_destination, obj):
+
+    # the matrix multiplations and inversions are only needed if you
+    # have unapplied transforms, else they could be dropped. but it's handy
+    # to have the algorithm take them into account, for generality.
+    mat = obj.matrix_local.inverted()
+    f = obj.ray_cast(mat * ray_origin, mat * ray_destination)
+    loc, normal, face_idx = f
+
+    if face_idx == -1:
+        return False
+
+    max_expected_intersections = 1000
+    fudge_distance = 0.0001
+    direction = (ray_destination - loc)
+    dir_len = direction.length
+    amount = fudge_distance / dir_len
+
+    i = 1
+    while (face_idx != -1):
+
+        loc = loc.lerp(direction, amount)    
+        f = obj.ray_cast(mat * loc, mat * ray_destination)
+        loc, normal, face_idx = f
+        print(face_idx)
+        if face_idx == -1:
+            break
+        i += 1
+        if i > max_expected_intersections:
+            break
+
+    return not ((i % 2) == 0)
 
 def VecDistance(vec1, vec2):
     return sqrt((vec1.x - vec2.x)**2 + (vec1.y - vec2.y)**2 + (vec1.z - vec2.z)**2)
@@ -333,6 +376,12 @@ class FTressFXProps(bpy.types.PropertyGroup):
             default=False
             )
 
+        FTressFXProps.bDebugMode = bpy.props.BoolProperty(
+            name="Debug Mode", 
+            description="Adds extra fields to the file to aid in debugging",
+            default=False
+            )
+
         FTressFXProps.bInvertZAxis = bpy.props.BoolProperty(
             name="Invert Z-axis of Hairs", 
             description="inverts the Z component of hair vertices. This may be useful to deal with some engines using left-handed coordinate system",
@@ -526,6 +575,15 @@ class FTressFXPanel(bpy.types.Panel):
                 leftcol.operator("tressfxbones.clear_list", icon="X")
                 leftcol.operator("tressfxbones.remove_duplicates", icon="GHOST")
 
+                
+            #bDebugMode
+            DebugModeRow = MainBox.row()
+            DebugModeSplit = DebugModeRow.split(percentage=0.5)
+            LeftCol = DebugModeSplit.column()
+            LeftCol.label(text="Debug Mode")
+            RightCol = DebugModeSplit.column()
+            RightCol.prop(oTFXProps, "bDebugMode", text="")
+
             #export path label
             OutputPathRow = MainBox.row()
             OutputPathRow.label(text="Output Path:")
@@ -541,7 +599,7 @@ class FTressFXPanel(bpy.types.Panel):
             
             FilenameBoxRow = MainBox.row()
             FilenameBoxRow.prop(oTFXProps, 'sOutputName', text='')    
-    
+
             ExportRow = MainBox.row()             
             ExportRow.operator("tressfx.export", text="Export")
 
@@ -634,22 +692,9 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'ERROR'}, "Not enough curves found after accounting for Min Curve Length! at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
             return 'ERROR'
 
-        if self.bRandomizeStrandsForLOD:
-            random.shuffle(curvesToUse)
-
-        RootPositions = []
-        nNumCurves = len(curvesToUse)
-        
-        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
-        print(OutFilePath)
-
-        FinalObj = {}
-        FinalObj['positions'] = []
-        FinalObj['uvs'] = []
-        FinalObj['numHairStrands'] = nNumCurves
-        FinalObj['numVerticesPerStrand'] = self.nNumVertsPerStrand
-
-        for nHairIdx, CurveObj in enumerate(curvesToUse):
+        #make curves compatible with TressFX
+        Finalcurves = []
+        for idx, CurveObj in enumerate(curvesToUse):
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
@@ -661,6 +706,27 @@ class FTressFXExport(bpy.types.Operator):
                 # uses Visvalingam-Whyatt method
                 SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
                 CurvePoints = SimplifiedCurve
+
+            if len(CurvePoints) != self.nNumVertsPerStrand:
+                raise Exception('len(CurvePoints) != self.nNumVertsPerStrand')
+
+            Finalcurves.append(CurvePoints)
+
+        if self.bRandomizeStrandsForLOD:
+            random.shuffle(Finalcurves)
+        
+        nNumCurves = len(Finalcurves)
+        
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
+        print(OutFilePath)
+
+        FinalObj = {}
+        FinalObj['positions'] = []
+        FinalObj['uvs'] = []
+        FinalObj['numHairStrands'] = nNumCurves
+        FinalObj['numVerticesPerStrand'] = self.nNumVertsPerStrand
+
+        for nHairIdx, CurvePoints in enumerate(Finalcurves):
 
             # now we ready to write the points
             strandVerts = []
@@ -692,16 +758,13 @@ class FTressFXExport(bpy.types.Operator):
                 strandVerts.append(vert)
             # enumerate(CurvePoints):
             FinalObj['positions'].append(strandVerts)
-
-            # How do i know which point is the start of the curve?
-            # for now im assuming its 0, not the end
-            RootPositions.append(CurvePoints[0])
-        # enumerate(curvesToUse) END
+        # enumerate(Finalcurves) END
         
         # get strand texture coords
-        for nPtIdx, Point in enumerate(RootPositions):
+        for strandIndex, Points in enumerate(Finalcurves):
             
-            pVector = mathutils.Vector((Point[0],Point[1],Point[2]))
+            rootPoint = Points[0]
+            pVector = mathutils.Vector((rootPoint[0],rootPoint[1],rootPoint[2]))
 
             #get closest point on base mesh
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
@@ -732,19 +795,19 @@ class FTressFXExport(bpy.types.Operator):
             uvObj['x'] = UVCoord.x
             uvObj['y'] = UVCoord.y
             FinalObj['uvs'].append(uvObj)
-        #enumerate(RootPositions) END
+        #enumerate(Finalcurves) END
 
-        boneData = self.getTFXBoneJSON(context, RootPositions)
+        boneData = self.getTFXBoneJSON(context, Finalcurves)
         if boneData != 'ERROR':
-            FinalObj['tfxBoneData'] = self.getTFXBoneJSON(context, RootPositions)
+            FinalObj['tfxBoneData'] = boneData
         else:
             return 'ERROR'
 
         with open(OutFilePath, "w") as TfxFile :
             TfxFile.write(json.dumps(FinalObj, indent=4))
-        return RootPositions
+        return Finalcurves
 
-    def getTFXBoneJSON(self, context, RootPositions):
+    def getTFXBoneJSON(self, context, Finalcurves):
 
         VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
         AllBonesArray = [] # aka used bones
@@ -770,7 +833,18 @@ class FTressFXExport(bpy.types.Operator):
                     if bn.use_deform:
                         AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
 
-        for RootIndex, RootPoint in enumerate(RootPositions):
+        for RootIndex, StrandPoints in enumerate(Finalcurves):
+
+            #TODO: root points could be well inside the mesh and closest_point_on_mesh
+            # would return wrong in this case.
+            # instead make a copy of the curve, and find the first intersection point on the mesh
+            # if no point is found, then just use the root position
+
+            # perhaps use raycast, with origin as the first point, direction as the second point
+            # if it returns nothing then use the root point
+
+            #use whatever point returned above to find the closest_point_on_mesh instead
+            RootPoint = StrandPoints[0]
             pVector = mathutils.Vector((RootPoint[0],RootPoint[1],RootPoint[2]))
 	        # Find the closest point info
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
@@ -795,6 +869,7 @@ class FTressFXExport(bpy.types.Operator):
                     boneweightmapObj = BoneweightmapObj()
                     boneweightmapObj.boneName = Bone.name
                     boneweightmapObj.weight = weight
+                    boneweightmapObj.sourceVertIndex = ClosestVert.index
                     ClosestVertWeights.append( boneweightmapObj )
                     if Bone.name not in BonesArray_WithWeightsOnly:
                         BonesArray_WithWeightsOnly.append(Bone.name)
@@ -816,10 +891,13 @@ class FTressFXExport(bpy.types.Operator):
                 j = {}
                 j['weight'] = boneweightmapObj.weight
                 j['boneName'] = boneweightmapObj.boneName
+                if self.bDebugMode:
+                    j['sourceVertIndex'] = boneweightmapObj.sourceVertIndex
+                    j['rootIndex'] = RootIndex
                 FinalObj['skinningData'].append( j )
-        #enumerate(RootPositions):
+        #enumerate(Finalcurves):
 
-        FinalObj['numGuideStrands'] = len(RootPositions)
+        FinalObj['numGuideStrands'] = len(Finalcurves)
         FinalObj['bonesList'] = BonesArray_WithWeightsOnly
 
         return FinalObj
@@ -833,6 +911,9 @@ class FTressFXExport(bpy.types.Operator):
 
         self.nNumVertsPerStrand = None
         self.oBaseMesh = None
+
+        self.bDebugMode = oTFXProps.bDebugMode
+        print('     bdebugMode: ' + str(self.bDebugMode))
 
         if oTFXProps.sBaseMesh and oTFXProps.sBaseMesh in bpy.data.objects:
             self.oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
