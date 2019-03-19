@@ -56,6 +56,25 @@ class WeightJointIndexPair:
 	def __lt__(self, other):
 		return self.weight > other.weight
 
+
+def FindCurveIntersectionWithMesh(CurvePointsAsVectorsArray, MeshObj):
+    """assumes points array goes from root -> tip"""
+
+    Direction = (CurvePointsAsVectorsArray[1] - CurvePointsAsVectorsArray[0]).normalized()
+    #TODO, iterate until i find how many points starting from first point are inside
+    # and use direction between Root point, and last inside point as Direction Variable
+    # if only root point is inside mesh, always just use the second point
+    
+    for Face in MeshObj.data.polygons:
+
+        Origin = CurvePointsAsVectorsArray[0]
+        VerticesIndices = Face.vertices
+        p1, p2, p3 = [MeshObj.data.vertices[VerticesIndices[i]].co for i in range(3)]
+        found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, True)
+        if found is not None:
+            return found
+    return None
+
 def IsPointInsideMesh(MeshObj, PointInObjectSpace):      
     #direction is irellevant unless mesh is REALLY wierd shaped
     direction = mathutils.Vector((1,0,0))  
@@ -853,31 +872,38 @@ class FTressFXExport(bpy.types.Operator):
             RootPoint = StrandPoints[0]
             SecondPoint = StrandPoints[1]
 
-
-            IsRootInside = IsPointInsideMesh(self.oBaseMesh, RootPoint)
-
-            #TODO: root points could be well inside the mesh,
-            # and closest_point_on_mesh would return wrong in this case.
-            # use raycast, first point as origin, second point as direction
-            # if it returns nothing then use the root point
-
-            pointToUse = None
-
-            if IsRootInside:
+            pVectors = [ mathutils.Vector( (x[0], x[1], x[2] ) ) for x in StrandPoints ]
+            IntersectionPoint = FindCurveIntersectionWithMesh(pVectors, self.oBaseMesh)
+            if IntersectionPoint is None:
                 if self.bDebugMode:
-                    print('Root ' + str(RootIndex) + ' is inside mesh...Raycasting to find point')
-                (result, location, normal, FaceIndex) = self.oBaseMesh.ray_cast(RootPoint, SecondPoint)
-                if result:
-                    pointToUse = location
-                    if self.bDebugMode:
-                        print('Raycast Found better point. Faceindex: ' + str(FaceIndex))
-                else:
-                    pointToUse = RootPoint
-                    print('No better point found')
-            else:
-                pointToUse = RootPoint
-                if self.bDebugMode:
-                    print('Root ' + str(RootIndex) + ' is NOT inside mesh... using rootpoint')
+                    print('no intersection point found for Rootindex: ' + str(RootIndex) + ' using rootpoint instead')
+                IntersectionPoint = RootPoint
+            
+            pointToUse = IntersectionPoint
+            # IsRootInside = IsPointInsideMesh(self.oBaseMesh, RootPoint)
+
+            # #TODO: root points could be well inside the mesh,
+            # # and closest_point_on_mesh would return wrong in this case.
+            # # use raycast, first point as origin, second point as direction
+            # # if it returns nothing then use the root point
+
+            # pointToUse = None
+
+            # if IsRootInside:
+            #     if self.bDebugMode:
+            #         print('Root ' + str(RootIndex) + ' is inside mesh...Raycasting to find point')
+            #     (result, location, normal, FaceIndex) = self.oBaseMesh.ray_cast(RootPoint, SecondPoint)
+            #     if result:
+            #         pointToUse = location
+            #         if self.bDebugMode:
+            #             print('Raycast Found better point. Faceindex: ' + str(FaceIndex))
+            #     else:
+            #         pointToUse = RootPoint
+            #         print('No better point found')
+            # else:
+            #     pointToUse = RootPoint
+            #     if self.bDebugMode:
+            #         print('Root ' + str(RootIndex) + ' is NOT inside mesh... using rootpoint')
 
 
             #use whatever point returned above to find the closest_point_on_mesh instead
