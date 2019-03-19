@@ -56,6 +56,17 @@ class WeightJointIndexPair:
 	def __lt__(self, other):
 		return self.weight > other.weight
 
+def IsPointInsideMesh(MeshObj, PointInObjectSpace):      
+    #direction is irellevant unless mesh is REALLY wierd shaped
+    direction = mathutils.Vector((1,0,0))  
+    epsilon = direction * 1e-6  
+    count = 0  
+    result, PointInObjectSpace, normal, index = MeshObj.ray_cast(PointInObjectSpace, direction)  
+    while result:  
+        count += 1  
+        result, PointInObjectSpace, normal, index = MeshObj.ray_cast(PointInObjectSpace + epsilon, direction)  
+    return (count % 2) == 1  
+
 #this assumes all faces of the object are pointing outwards
 def is_inside2(p, obj, max_dist = 1.84467e+19):
 
@@ -692,6 +703,9 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'ERROR'}, "Not enough curves found after accounting for Min Curve Length! at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
             return 'ERROR'
 
+        if self.bRandomizeStrandsForLOD:
+            random.shuffle(curvesToUse)
+
         #make curves compatible with TressFX
         Finalcurves = []
         for idx, CurveObj in enumerate(curvesToUse):
@@ -702,6 +716,9 @@ class FTressFXExport(bpy.types.Operator):
             
             #now resample to exactly nNumVertsPerStrand if needed
             if len(CurvePoints) != self.nNumVertsPerStrand:
+                if self.bDebugMode:
+                    print('strand index ' + str(idx) + ' has ' + str(len(CurvePoints)) + ' points. Simplifying to ' + str(self.nNumVertsPerStrand) )
+                
                 Simplifier = simp.Simplifier(CurvePoints)
                 # uses Visvalingam-Whyatt method
                 SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
@@ -711,9 +728,6 @@ class FTressFXExport(bpy.types.Operator):
                 raise Exception('len(CurvePoints) != self.nNumVertsPerStrand')
 
             Finalcurves.append(CurvePoints)
-
-        if self.bRandomizeStrandsForLOD:
-            random.shuffle(Finalcurves)
         
         nNumCurves = len(Finalcurves)
         
@@ -835,17 +849,40 @@ class FTressFXExport(bpy.types.Operator):
 
         for RootIndex, StrandPoints in enumerate(Finalcurves):
 
-            #TODO: root points could be well inside the mesh and closest_point_on_mesh
-            # would return wrong in this case.
-            # instead make a copy of the curve, and find the first intersection point on the mesh
-            # if no point is found, then just use the root position
+            #TODO: root point may not always be the first point, especially if the curves were imported from a file
+            RootPoint = StrandPoints[0]
+            SecondPoint = StrandPoints[1]
 
-            # perhaps use raycast, with origin as the first point, direction as the second point
+
+            IsRootInside = IsPointInsideMesh(self.oBaseMesh, RootPoint)
+
+            #TODO: root points could be well inside the mesh,
+            # and closest_point_on_mesh would return wrong in this case.
+            # use raycast, first point as origin, second point as direction
             # if it returns nothing then use the root point
 
+            pointToUse = None
+
+            if IsRootInside:
+                if self.bDebugMode:
+                    print('Root ' + str(RootIndex) + ' is inside mesh...Raycasting to find point')
+                (result, location, normal, FaceIndex) = self.oBaseMesh.ray_cast(RootPoint, SecondPoint)
+                if result:
+                    pointToUse = location
+                    if self.bDebugMode:
+                        print('Raycast Found better point. Faceindex: ' + str(FaceIndex))
+                else:
+                    pointToUse = RootPoint
+                    print('No better point found')
+            else:
+                pointToUse = RootPoint
+                if self.bDebugMode:
+                    print('Root ' + str(RootIndex) + ' is NOT inside mesh... using rootpoint')
+
+
             #use whatever point returned above to find the closest_point_on_mesh instead
-            RootPoint = StrandPoints[0]
-            pVector = mathutils.Vector((RootPoint[0],RootPoint[1],RootPoint[2]))
+
+            pVector = mathutils.Vector((pointToUse[0],pointToUse[1],pointToUse[2]))
 	        # Find the closest point info
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
 
