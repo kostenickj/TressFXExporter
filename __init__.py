@@ -56,24 +56,73 @@ class WeightJointIndexPair:
 	def __lt__(self, other):
 		return self.weight > other.weight
 
+def ConvertParticleSystemHairsToCurves(BaseMesh, ParticleSystemName):
+    """this function is broken hard"""
+    Curves = []
+    hairs = BaseMesh.particle_systems[ParticleSystemName].particles
+    
+    for HairIndex, hair in enumerate(hairs):
+        
+        Verts = [v.co for v in hair.hair_keys]
+        # create the Curve Datablock
+        CurveName = ParticleSystemName + '_' + str(HairIndex)
+        curveData = bpy.data.curves.new(CurveName, type='CURVE')
+        polyline = curveData.splines.new('POLY')
+        polyline.points.add(len(Verts))
+        
+        for i, coord in enumerate(Verts):
+            x,y,z = coord
+            polyline.points[i].co = coord
+
+        # create Object
+        curveOB = bpy.data.objects.new(CurveName, curveData)
+        
+        # attach to scene and validate context
+        bpy.context.scene.objects.link(curveOB)
+        bpy.context.scene.objects.active = curveOB
+        curveOB.select = True
+        Curves.append(curveOB)
+    
+    return Curves
 
 def FindCurveIntersectionWithMesh(CurvePointsAsVectorsArray, MeshObj):
     """assumes points array goes from root -> tip"""
 
     Direction = (CurvePointsAsVectorsArray[1] - CurvePointsAsVectorsArray[0]).normalized()
     #TODO, iterate until i find how many points starting from first point are inside
-    # and use direction between Root point, and last inside point as Direction Variable
+    # and use direction between the last inside point, and the next point after
     # if only root point is inside mesh, always just use the second point
-    
+
     for Face in MeshObj.data.polygons:
 
         Origin = CurvePointsAsVectorsArray[0]
         VerticesIndices = Face.vertices
         p1, p2, p3 = [MeshObj.data.vertices[VerticesIndices[i]].co for i in range(3)]
+        # last arg is clip, which i think should be true but its not finding enough hits...
         found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, True)
+        #found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, False)
         if found is not None:
             return found
     return None
+
+def MoveCurveVertSpaceToBaseMeshSpace(vec, baseMeshObj, CurveObj):
+    """needs testing"""
+    worldMatrix = CurveObj.matrix_world
+    ConvertMatrix = baseMeshObj.convert_space( matrix = worldMatrix, from_space = 'WORLD', to_space = 'LOCAL' )
+    NewVert = ConvertMatrix * vec
+    return NewVert
+
+
+def GetNumPointsInsideMesh(MeshObj, StrandPoints):
+    num = 0
+    for p in StrandPoints:
+        inside1 = IsPointInsideMesh(MeshObj, mathutils.Vector( (p[0], p[1], p[2]) ) )
+        inside2 = IsPointInsideMesh2(MeshObj, mathutils.Vector( (p[0], p[1], p[2]) ) )
+        if inside1 != inside2:
+            raise Exception('inside1 != inside2')
+        if inside1 or inside2:
+            num = num + 1
+    return num
 
 def IsPointInsideMesh(MeshObj, PointInObjectSpace):      
     #direction is irellevant unless mesh is REALLY wierd shaped
@@ -87,46 +136,13 @@ def IsPointInsideMesh(MeshObj, PointInObjectSpace):
     return (count % 2) == 1  
 
 #this assumes all faces of the object are pointing outwards
-def is_inside2(p, obj, max_dist = 1.84467e+19):
+def IsPointInsideMesh2(obj, p, max_dist = 1.84467e+19):
 
-    point, normal, face = obj.closest_point_on_mesh(p, max_dist)
+    bResult, point, normal, face = obj.closest_point_on_mesh(p, max_dist)
     p2 = point-p
     v = p2.dot(normal)
     print(v)
     return not(v < 0.0)
-
-def is_inside(ray_origin, ray_destination, obj):
-
-    # the matrix multiplations and inversions are only needed if you
-    # have unapplied transforms, else they could be dropped. but it's handy
-    # to have the algorithm take them into account, for generality.
-    mat = obj.matrix_local.inverted()
-    f = obj.ray_cast(mat * ray_origin, mat * ray_destination)
-    loc, normal, face_idx = f
-
-    if face_idx == -1:
-        return False
-
-    max_expected_intersections = 1000
-    fudge_distance = 0.0001
-    direction = (ray_destination - loc)
-    dir_len = direction.length
-    amount = fudge_distance / dir_len
-
-    i = 1
-    while (face_idx != -1):
-
-        loc = loc.lerp(direction, amount)    
-        f = obj.ray_cast(mat * loc, mat * ray_destination)
-        loc, normal, face_idx = f
-        print(face_idx)
-        if face_idx == -1:
-            break
-        i += 1
-        if i > max_expected_intersections:
-            break
-
-    return not ((i % 2) == 0)
 
 def VecDistance(vec1, vec2):
     return sqrt((vec1.x - vec2.x)**2 + (vec1.y - vec2.y)**2 + (vec1.z - vec2.z)**2)
@@ -158,6 +174,7 @@ def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
         return CurveObj
 
 def SeparateCurves(context):
+
     active = context.active_object
     splines = active.data.splines
     bpy.ops.object.mode_set(mode='EDIT')
@@ -678,7 +695,9 @@ class FTressFXCollisionExport(bpy.types.Operator):
 class FTressFXExport(bpy.types.Operator):
     '''
     Exports TressFX Files.
-    Base Mesh must be all triangles!
+    Requirements:
+    1. Base Mesh must be all triangles.
+    2. All curves and the base mesh must have rot and scale applied and origin be at the global origin (same space)
     Assumes that the selected UV map on the base mesh is the one to use when generating UV's for the hairs.
     '''    
 
@@ -705,7 +724,10 @@ class FTressFXExport(bpy.types.Operator):
 
         curvesToUse = []
         # account for minnum curve length
-        if self.fMinCurvelength > 0:
+
+        checkForMinCurveLength = bool(self.fMinCurvelength > 0)
+
+        if checkForMinCurveLength:
 
             for idx, curve in enumerate(lHairs):
                 CurveLength = self.GetCurveLength(context, curve)
@@ -718,15 +740,16 @@ class FTressFXExport(bpy.types.Operator):
         else:
             curvesToUse = lHairs
 
-        if len(curvesToUse) < TRESSFX_SIM_THREAD_GROUP_SIZE:
-            self.report({'ERROR'}, "Not enough curves found after accounting for Min Curve Length! at least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
-            return 'ERROR'
-
-        if self.bRandomizeStrandsForLOD:
+        if self.bRandomizeStrandsForLOD and not self.bDebugMode:
             random.shuffle(curvesToUse)
 
+        AdjustedCurves = []
+        # num verts per strand is always even so this is fine
+        CutoffPoint = self.nNumVertsPerStrand / 2
+
+        TotalNumInside = 0
+        
         #make curves compatible with TressFX
-        Finalcurves = []
         for idx, CurveObj in enumerate(curvesToUse):
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
@@ -746,9 +769,25 @@ class FTressFXExport(bpy.types.Operator):
             if len(CurvePoints) != self.nNumVertsPerStrand:
                 raise Exception('len(CurvePoints) != self.nNumVertsPerStrand')
 
-            Finalcurves.append(CurvePoints)
-        
-        nNumCurves = len(Finalcurves)
+            #check to see if more than half the points are inside the mesh, if so, discard that strand
+            NumInside = GetNumPointsInsideMesh(self.oBaseMesh, CurvePoints)
+            if NumInside > CutoffPoint:
+                TotalNumInside = TotalNumInside + 1
+                if self.bDebugMode:
+                    print('discarding strand with index: ' + str(idx) + '. More than half of the vertices are inside the base mesh.')
+                continue
+            else:
+                AdjustedCurves.append(CurvePoints)
+        #enumerate(curvesToUse): end
+
+        nNumCurves = len(AdjustedCurves)
+
+        if nNumCurves < TRESSFX_SIM_THREAD_GROUP_SIZE:
+            if checkForMinCurveLength:
+                self.report({'ERROR'}, "Not enough curves found after accounting for Min Curve Length! At least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
+            else:
+                self.report({'ERROR'}, "Not enough curves found! At least " + str(TRESSFX_SIM_THREAD_GROUP_SIZE) + " curves are required!")
+            return 'ERROR'
         
         OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oBaseMesh.name)  + ".tfxjson"
         print(OutFilePath)
@@ -758,8 +797,10 @@ class FTressFXExport(bpy.types.Operator):
         FinalObj['uvs'] = []
         FinalObj['numHairStrands'] = nNumCurves
         FinalObj['numVerticesPerStrand'] = self.nNumVertsPerStrand
+        if self.bDebugMode:
+            FinalObj['totalNumInside'] = TotalNumInside
 
-        for nHairIdx, CurvePoints in enumerate(Finalcurves):
+        for nHairIdx, CurvePoints in enumerate(AdjustedCurves):
 
             # now we ready to write the points
             strandVerts = []
@@ -791,10 +832,10 @@ class FTressFXExport(bpy.types.Operator):
                 strandVerts.append(vert)
             # enumerate(CurvePoints):
             FinalObj['positions'].append(strandVerts)
-        # enumerate(Finalcurves) END
+        # enumerate(AdjustedCurves) END
         
         # get strand texture coords
-        for strandIndex, Points in enumerate(Finalcurves):
+        for strandIndex, Points in enumerate(AdjustedCurves):
             
             rootPoint = Points[0]
             pVector = mathutils.Vector((rootPoint[0],rootPoint[1],rootPoint[2]))
@@ -828,9 +869,9 @@ class FTressFXExport(bpy.types.Operator):
             uvObj['x'] = UVCoord.x
             uvObj['y'] = UVCoord.y
             FinalObj['uvs'].append(uvObj)
-        #enumerate(Finalcurves) END
+        #enumerate(AdjustedCurves) END
 
-        boneData = self.getTFXBoneJSON(context, Finalcurves)
+        boneData = self.getTFXBoneJSON(context, AdjustedCurves)
         if boneData != 'ERROR':
             FinalObj['tfxBoneData'] = boneData
         else:
@@ -838,7 +879,7 @@ class FTressFXExport(bpy.types.Operator):
 
         with open(OutFilePath, "w") as TfxFile :
             TfxFile.write(json.dumps(FinalObj, indent=4))
-        return Finalcurves
+        return AdjustedCurves
 
     def getTFXBoneJSON(self, context, Finalcurves):
 
@@ -866,6 +907,7 @@ class FTressFXExport(bpy.types.Operator):
                     if bn.use_deform:
                         AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
 
+        TotalIntersects = 0
         for RootIndex, StrandPoints in enumerate(Finalcurves):
 
             #TODO: root point may not always be the first point, especially if the curves were imported from a file
@@ -874,39 +916,19 @@ class FTressFXExport(bpy.types.Operator):
 
             pVectors = [ mathutils.Vector( (x[0], x[1], x[2] ) ) for x in StrandPoints ]
             IntersectionPoint = FindCurveIntersectionWithMesh(pVectors, self.oBaseMesh)
+            
             if IntersectionPoint is None:
                 if self.bDebugMode:
                     print('no intersection point found for Rootindex: ' + str(RootIndex) + ' using rootpoint instead')
                 IntersectionPoint = RootPoint
-            
+            else:
+                TotalIntersects = TotalIntersects + 1
             pointToUse = IntersectionPoint
-            # IsRootInside = IsPointInsideMesh(self.oBaseMesh, RootPoint)
 
             # #TODO: root points could be well inside the mesh,
             # # and closest_point_on_mesh would return wrong in this case.
             # # use raycast, first point as origin, second point as direction
             # # if it returns nothing then use the root point
-
-            # pointToUse = None
-
-            # if IsRootInside:
-            #     if self.bDebugMode:
-            #         print('Root ' + str(RootIndex) + ' is inside mesh...Raycasting to find point')
-            #     (result, location, normal, FaceIndex) = self.oBaseMesh.ray_cast(RootPoint, SecondPoint)
-            #     if result:
-            #         pointToUse = location
-            #         if self.bDebugMode:
-            #             print('Raycast Found better point. Faceindex: ' + str(FaceIndex))
-            #     else:
-            #         pointToUse = RootPoint
-            #         print('No better point found')
-            # else:
-            #     pointToUse = RootPoint
-            #     if self.bDebugMode:
-            #         print('Root ' + str(RootIndex) + ' is NOT inside mesh... using rootpoint')
-
-
-            #use whatever point returned above to find the closest_point_on_mesh instead
 
             pVector = mathutils.Vector((pointToUse[0],pointToUse[1],pointToUse[2]))
 	        # Find the closest point info
@@ -962,7 +984,8 @@ class FTressFXExport(bpy.types.Operator):
 
         FinalObj['numGuideStrands'] = len(Finalcurves)
         FinalObj['bonesList'] = BonesArray_WithWeightsOnly
-
+        if self.bDebugMode:
+            FinalObj['totalIntersects'] = TotalIntersects
         return FinalObj
 
     def execute(self, context):
@@ -993,6 +1016,7 @@ class FTressFXExport(bpy.types.Operator):
             return {'CANCELLED'}
 
         if oTFXProps.eExportType == 'PARTICLE_SYSTEM':
+            
             self.eExportType = 'PARTICLE_SYSTEM'
             print('     eExportType: PARTICLE_SYSTEM')
             self.sParticleSystem = oTFXProps.sParticleSystem
@@ -1000,6 +1024,7 @@ class FTressFXExport(bpy.types.Operator):
                 self.report({'ERROR'}, "Particle system was selected as export type, but no particle system was selected. Aborting.")
                 return {'CANCELLED'}
             print('     sParticleSystem: ' + self.sParticleSystem)
+        
         else:
             self.eExportType = 'CURVES'
             print('     eExportType: CURVES')
@@ -1045,31 +1070,34 @@ class FTressFXExport(bpy.types.Operator):
             self.report({'ERROR'}, "No armature found on base mesh. Aborting")
             return {'CANCELLED'}
 
+        CurvesList = []
+
         if self.eExportType == 'PARTICLE_SYSTEM':
             #convert particle system to mesh using convert modifier
             bpy.ops.object.select_all(action='DESELECT')
             bpy.context.scene.objects.active = self.oBaseMesh
+            CurvesList = ConvertParticleSystemHairsToCurves(self.oBaseMesh, self.sParticleSystem)
+            # bFound = False
+            # for mod in self.oBaseMesh.modifiers:
+            #     if mod.type == 'PARTICLE_SYSTEM' and mod.particle_system.name == self.sParticleSystem:
+            #         print("Converting particle system '" + mod.particle_system.name + "' to mesh...")
+            #         bpy.ops.object.modifier_convert(modifier=mod.name)
+            #         bFound = True
+            #         break
 
-            bFound = False
-            for mod in self.oBaseMesh.modifiers:
-                if mod.type == 'PARTICLE_SYSTEM' and mod.particle_system.name == self.sParticleSystem:
-                    print("Converting particle system '" + mod.particle_system.name + "' to mesh...")
-                    bpy.ops.object.modifier_convert(modifier=mod.name)
-                    bFound = True
-                    break
+            # if bFound == False:
+            #     self.report({'ERROR'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
+            #     return {'CANCELLED'}
 
-            if bFound == False:
-                self.report({'ERROR'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
-                return {'CANCELLED'}
-
-            #new mesh should already be selected, convert it to curves
-            bpy.ops.object.convert(target='CURVE')
-            #separate them into invidual curves
-            SeparateCurves(context)
+            # #new mesh should already be selected, convert it to curves
+            # bpy.ops.object.convert(target='CURVE')
+            # #separate them into invidual curves
+            # SeparateCurves(context)
         else:
+            CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
             print("using selected curves as strands. Assuming they are already sperated into individual curve objects.")
 
-        CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
+        
         print(str(len(CurvesList)) + " curves found...")
 
         if len(CurvesList) < TRESSFX_SIM_THREAD_GROUP_SIZE:
@@ -1080,7 +1108,7 @@ class FTressFXExport(bpy.types.Operator):
         if success == 'ERROR':
             return {'CANCELLED'}
 
-        if self.eExportType == 'PARTICLE_SYSTEM':
+        if self.eExportType == 'PARTICLE_SYSTEM' and not self.bDebugMode:
             # delete the potentially thousands of curves we generated
             print('Deleting ' + str(len(CurvesList)) + ' temporary curves...')
             bpy.ops.object.select_all(action='DESELECT')
