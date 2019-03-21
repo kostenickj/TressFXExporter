@@ -57,22 +57,32 @@ class WeightJointIndexPair:
 		return self.weight > other.weight
 
 def ConvertParticleSystemHairsToCurves(BaseMesh, ParticleSystemName):
-    """this function is broken hard"""
+    """this function only converts the particle keys, not child particles"""
     Curves = []
-    hairs = BaseMesh.particle_systems[ParticleSystemName].particles
+
+    ParticleSystemObj = BaseMesh.particle_systems[ParticleSystemName]
+    hairs = ParticleSystemObj.particles
+
+    worldMatrix = BaseMesh.matrix_world
     
     for HairIndex, hair in enumerate(hairs):
         
-        Verts = [v.co for v in hair.hair_keys]
+        StrandVerts = []
+
+        for v in hair.hair_keys:
+            InWs = worldMatrix * v.co
+            StrandVerts.append(InWs)
+        
         # create the Curve Datablock
         CurveName = ParticleSystemName + '_' + str(HairIndex)
         curveData = bpy.data.curves.new(CurveName, type='CURVE')
+        curveData.dimensions = '3D'
+        curveData.resolution_u = 12
         polyline = curveData.splines.new('POLY')
-        polyline.points.add(len(Verts))
+        polyline.points.add(len(StrandVerts) - 1) # theres already one point by default
         
-        for i, coord in enumerate(Verts):
-            x,y,z = coord
-            polyline.points[i].co = coord
+        for i, vert in enumerate(StrandVerts):
+            polyline.points[i].co = (vert.x, vert.y, vert.z, 1)
 
         # create Object
         curveOB = bpy.data.objects.new(CurveName, curveData)
@@ -113,13 +123,14 @@ def MoveCurveVertSpaceToBaseMeshSpace(vec, baseMeshObj, CurveObj):
     return NewVert
 
 
-def GetNumPointsInsideMesh(MeshObj, StrandPoints):
+def GetNumPointsInsideMesh(MeshObj, CurveObj):
+    
     num = 0
-    for p in StrandPoints:
-        inside1 = IsPointInsideMesh(MeshObj, mathutils.Vector( (p[0], p[1], p[2]) ) )
-        inside2 = IsPointInsideMesh2(MeshObj, mathutils.Vector( (p[0], p[1], p[2]) ) )
-        if inside1 != inside2:
-            raise Exception('inside1 != inside2')
+    for p in CurveObj.data.splines[0].points:
+        inside1 = IsPointInsideMesh(MeshObj, p.co.xyz )
+        inside2 = IsPointInsideMesh2(MeshObj, p.co.xyz  )
+        # if inside1 != inside2:
+        #     raise Exception('inside1 != inside2')
         if inside1 or inside2:
             num = num + 1
     return num
@@ -141,7 +152,6 @@ def IsPointInsideMesh2(obj, p, max_dist = 1.84467e+19):
     bResult, point, normal, face = obj.closest_point_on_mesh(p, max_dist)
     p2 = point-p
     v = p2.dot(normal)
-    print(v)
     return not(v < 0.0)
 
 def VecDistance(vec1, vec2):
@@ -173,8 +183,28 @@ def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
         bpy.ops.object.mode_set(mode='OBJECT')
         return CurveObj
 
-def SeparateCurves(context):
+def CreateNewCurveFromPoints(StrandVerts, CurveName):
+    
+    curveData = bpy.data.curves.new(CurveName, type='CURVE')
+    curveData.dimensions = '3D'
+    curveData.resolution_u = 12
+    polyline = curveData.splines.new('POLY')
+    polyline.points.add(len(StrandVerts) - 1) # theres already one point by default
+    
+    for i, vert in enumerate(StrandVerts):
+        polyline.points[i].co = (vert.x, vert.y, vert.z, 1)
 
+    # create Object
+    curveOB = bpy.data.objects.new(CurveName, curveData)
+    
+    # attach to scene and validate context
+    bpy.context.scene.objects.link(curveOB)
+    bpy.context.scene.objects.active = curveOB
+    curveOB.select = True
+    return curveOB
+
+def SeparateCurves(context):
+    """this runs out of memory or something on a ton of curves, don't use"""
     active = context.active_object
     splines = active.data.splines
     bpy.ops.object.mode_set(mode='EDIT')
@@ -190,6 +220,28 @@ def SeparateCurves(context):
         bpy.ops.curve.separate()
 
     bpy.ops.object.mode_set(mode='OBJECT')
+
+def SeparateCurves2(context):
+    
+    """this is much faster than using the other separatecurves function"""
+    Curves = []
+    active = context.active_object
+    splines = active.data.splines
+
+    for idx, spline in enumerate(splines):        
+
+        CurveName = active.name + "_" + str(idx)
+        StrandVerts = [v.co for v in spline.points]
+        # create Object
+        curveOB = CreateNewCurveFromPoints(StrandVerts, CurveName)
+        Curves.append(curveOB)
+
+    #delete original curve that had all the curves in one object
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.data.objects[active.name].select = True
+    bpy.ops.object.delete()
+
+    return Curves
 
 def OnTressFXBaseMeshChange(self, context):
     #NOTE: self is FTressFXProps instance
@@ -361,7 +413,6 @@ class FTressFXBoneProps(bpy.types.PropertyGroup):
     
     @classmethod
     def register(FTressFXBoneProps):
-        print('here')
         FTressFXBoneProps.sBoneName = bpy.props.StringProperty(
             name="Bone Name", 
             description="Bone Name"
@@ -754,30 +805,42 @@ class FTressFXExport(bpy.types.Operator):
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
-            CurvePoints = [(vert.x, vert.y, vert.z) for vert in [p.co for p in CorrectCurve.data.splines[0].points]]
             
+            
+            NewCurve = CorrectCurve
             #now resample to exactly nNumVertsPerStrand if needed
-            if len(CurvePoints) != self.nNumVertsPerStrand:
+            if len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand:
+
+                CurvePoints = [(vert.x, vert.y, vert.z) for vert in [p.co for p in CorrectCurve.data.splines[0].points]]
+
                 if self.bDebugMode:
                     print('strand index ' + str(idx) + ' has ' + str(len(CurvePoints)) + ' points. Simplifying to ' + str(self.nNumVertsPerStrand) )
                 
                 Simplifier = simp.Simplifier(CurvePoints)
                 # uses Visvalingam-Whyatt method
                 SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
-                CurvePoints = SimplifiedCurve
+                SimplifiedCurveVectorList = [mathutils.Vector((vec[0],vec[1],vec[2])) for vec in SimplifiedCurve]
+                
+                #create new curve with exactly the right number of points
+                NewCurve = CreateNewCurveFromPoints(SimplifiedCurveVectorList, CorrectCurve.name + "_" + str(idx) )
+                #delete old curve
+                bpy.ops.object.select_all(action='DESELECT')
+                bpy.data.objects[CorrectCurve.name].select = True
+                bpy.ops.object.delete()
 
-            if len(CurvePoints) != self.nNumVertsPerStrand:
-                raise Exception('len(CurvePoints) != self.nNumVertsPerStrand')
+            if len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand:
+                raise Exception('len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand')
 
             #check to see if more than half the points are inside the mesh, if so, discard that strand
-            NumInside = GetNumPointsInsideMesh(self.oBaseMesh, CurvePoints)
+            NumInside = GetNumPointsInsideMesh(self.oBaseMesh, NewCurve)
+
             if NumInside > CutoffPoint:
                 TotalNumInside = TotalNumInside + 1
                 if self.bDebugMode:
                     print('discarding strand with index: ' + str(idx) + '. More than half of the vertices are inside the base mesh.')
                 continue
             else:
-                AdjustedCurves.append(CurvePoints)
+                AdjustedCurves.append(NewCurve)
         #enumerate(curvesToUse): end
 
         nNumCurves = len(AdjustedCurves)
@@ -800,10 +863,11 @@ class FTressFXExport(bpy.types.Operator):
         if self.bDebugMode:
             FinalObj['totalNumInside'] = TotalNumInside
 
-        for nHairIdx, CurvePoints in enumerate(AdjustedCurves):
+        for nHairIdx, CurveObj in enumerate(AdjustedCurves):
 
             # now we ready to write the points
             strandVerts = []
+            #START HERE JAKE, get points from curveobj
             for PtIdx, Point in enumerate(CurvePoints):
                 vert = {}
                 p = TressFX_Float4()
@@ -971,8 +1035,8 @@ class FTressFXExport(bpy.types.Operator):
             print('root index: ' + str(RootIndex))
             for idx in range( TRESSFX_MAX_INFLUENTIAL_BONE_COUNT):
                 boneweightmapObj = ClosestVertWeights[idx]
-                print( boneweightmapObj.boneName )
-                print( '    weight: ' + '{:.6f}'.format(boneweightmapObj.weight))
+                #print( boneweightmapObj.boneName )
+                #print( '    weight: ' + '{:.6f}'.format(boneweightmapObj.weight))
                 j = {}
                 j['weight'] = boneweightmapObj.weight
                 j['boneName'] = boneweightmapObj.boneName
@@ -1076,27 +1140,28 @@ class FTressFXExport(bpy.types.Operator):
             #convert particle system to mesh using convert modifier
             bpy.ops.object.select_all(action='DESELECT')
             bpy.context.scene.objects.active = self.oBaseMesh
-            CurvesList = ConvertParticleSystemHairsToCurves(self.oBaseMesh, self.sParticleSystem)
-            # bFound = False
-            # for mod in self.oBaseMesh.modifiers:
-            #     if mod.type == 'PARTICLE_SYSTEM' and mod.particle_system.name == self.sParticleSystem:
-            #         print("Converting particle system '" + mod.particle_system.name + "' to mesh...")
-            #         bpy.ops.object.modifier_convert(modifier=mod.name)
-            #         bFound = True
-            #         break
+            # CurvesList = ConvertParticleSystemHairsToCurves(self.oBaseMesh, self.sParticleSystem)
+            
+            bFound = False
+            for mod in self.oBaseMesh.modifiers:
+                if mod.type == 'PARTICLE_SYSTEM' and mod.particle_system.name == self.sParticleSystem:
+                    print("Converting particle system '" + mod.particle_system.name + "' to mesh...")
+                    bpy.ops.object.modifier_convert(modifier=mod.name)
+                    bFound = True
+                    break
 
-            # if bFound == False:
-            #     self.report({'ERROR'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
-            #     return {'CANCELLED'}
+            if bFound == False:
+                self.report({'ERROR'}, "unable to find particle system: " + self.sParticleSystem + ". Aborting")
+                return {'CANCELLED'}
 
-            # #new mesh should already be selected, convert it to curves
-            # bpy.ops.object.convert(target='CURVE')
-            # #separate them into invidual curves
-            # SeparateCurves(context)
+            #new mesh should already be selected, convert it to curves
+            bpy.ops.object.convert(target='CURVE')
+            #separate them into invidual curves
+            print('separating into individual curves...')
+            CurvesList = SeparateCurves2(context)
         else:
-            CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
             print("using selected curves as strands. Assuming they are already sperated into individual curve objects.")
-
+            CurvesList = [p for p in bpy.context.scene.objects if p.select and p.type == 'CURVE']
         
         print(str(len(CurvesList)) + " curves found...")
 
