@@ -5,7 +5,7 @@ bl_info = {
     "blender": (2, 79, 0),
     "description": "YEET",
     "warning": "",
-    "wiki_url": "",
+    "wiki_url": "YOLO",
     "category": "Animation",
 }
 
@@ -24,7 +24,6 @@ thisdir = os.path.dirname(__file__)
 if not thisdir in sys.path:
     sys.path.append(thisdir )
 
-import CurveSimplifier as simp
 import Curvesimplifier2 as simp2
 
 # Don't change the following maximum joints per vertex value. It must match the one in TressFX loader and simulation
@@ -61,6 +60,8 @@ def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
     """assumes points array goes from root -> tip"""
 
     CurvePointsAsVectorsArray = [p.co for p in CurveObj.data.splines[0].points]
+
+    #TODO, is this the corret subtraction order to get direction?
     Direction = (CurvePointsAsVectorsArray[1] - CurvePointsAsVectorsArray[0]).normalized()
     #TODO, iterate until i find how many points starting from first point are inside
     # and use direction between the last inside point, and the next point after
@@ -71,6 +72,9 @@ def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
         Origin = CurvePointsAsVectorsArray[0]
         VerticesIndices = Face.vertices
         p1, p2, p3 = [MeshObj.data.vertices[VerticesIndices[i]].co for i in range(3)]
+
+        #TODO, verts of curve may need to be put in same space as mesh...
+
         # last arg is clip, which i think should be true but its not finding enough hits...
         found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, True)
         #found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, False)
@@ -737,8 +741,8 @@ class FTressFXExport(bpy.types.Operator):
     def SaveTFXHairJsonFile(self, context, lHairs):
 
         curvesToUse = []
-        # account for minnum curve length
 
+        # account for minnum curve length
         checkForMinCurveLength = bool(self.fMinCurvelength > 0)
 
         if checkForMinCurveLength:
@@ -757,9 +761,9 @@ class FTressFXExport(bpy.types.Operator):
         if self.bRandomizeStrandsForLOD and not self.bDebugMode:
             random.shuffle(curvesToUse)
 
-        AdjustedCurves = []
+        FinalCurves = []
         # num verts per strand is always even so this is fine
-        CutoffPoint = self.nNumVertsPerStrand / 2
+        CutoffPoint = int(self.nNumVertsPerStrand / 2)
 
         TotalNumInside = 0
         
@@ -768,41 +772,23 @@ class FTressFXExport(bpy.types.Operator):
 
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
-            
-            NewCurve = CorrectCurve
+            NewCurve = None
             #now resample to exactly nNumVertsPerStrand if needed
-            if len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand:
-
-                CurvePoints = [(vert.x, vert.y, vert.z) for vert in [p.co for p in CorrectCurve.data.splines[0].points]]
+            if len(CorrectCurve.data.splines[0].points) != self.nNumVertsPerStrand:
 
                 if self.bDebugMode:
-                    print('strand index ' + str(idx) + ' has ' + str(len(CurvePoints)) + ' points. Simplifying to ' + str(self.nNumVertsPerStrand) )
+                    print('strand index ' + str(idx) + ' has ' + str(len(CorrectCurve.data.splines[0].points)) + ' points. Simplifying to ' + str(self.nNumVertsPerStrand) )
                 
-                CorrectCurve = simp2.SimplifyCurve(context, CorrectCurve, self.nNumVertsPerStrand)
-                
-                #Simplifier = simp.Simplifier(CurvePoints)
-                # uses Visvalingam-Whyatt method
-                #SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
-                #SimplifiedCurveVectorList = [mathutils.Vector((vec[0],vec[1],vec[2])) for vec in SimplifiedCurve]
-  
-                #make sure first and last points were not changed, simplifier doesnt seem to be working correctly...
-                #TODO find out why
-                #SimplifiedCurveVectorList[0] = mathutils.Vector( (CurvePoints[0][0],CurvePoints[0][1],CurvePoints[0][2])  )
-                #last = len(CurvePoints) - 1
-                #SimplifiedCurveVectorList[self.nNumVertsPerStrand - 1] = mathutils.Vector( (CurvePoints[last][0],CurvePoints[last][1],CurvePoints[last][2] ) )
-                
-                #create new curve with exactly the right number of points
+                #modify curve so it has exactly the right number of points
+                NewCurve = simp2.SimplifyCurve(context, CorrectCurve, self.nNumVertsPerStrand)
+            else:
                 NewCurve = CorrectCurve
-                #NewCurve = CreateNewCurveFromPoints(SimplifiedCurveVectorList, CorrectCurve.name + "_" + str(idx) )
-                #delete old curve
-                # bpy.ops.object.select_all(action='DESELECT')
-                # bpy.data.objects[CorrectCurve.name].select = True
-                # bpy.ops.object.delete()
 
             if len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand:
                 raise Exception('len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand')
 
             #check to see if more than half the points are inside the mesh, if so, discard that strand
+            #TODO i think this isnt working right
             NumInside = GetNumPointsInsideMesh(self.oBaseMesh, NewCurve)
 
             if NumInside > CutoffPoint:
@@ -811,10 +797,10 @@ class FTressFXExport(bpy.types.Operator):
                     print('discarding strand with index: ' + str(idx) + '. More than half of the vertices are inside the base mesh.')
                 continue
             else:
-                AdjustedCurves.append(NewCurve)
+                FinalCurves.append(NewCurve)
         #enumerate(curvesToUse): end
 
-        nNumCurves = len(AdjustedCurves)
+        nNumCurves = len(FinalCurves)
 
         if nNumCurves < TRESSFX_SIM_THREAD_GROUP_SIZE:
             if checkForMinCurveLength:
@@ -834,13 +820,13 @@ class FTressFXExport(bpy.types.Operator):
         if self.bDebugMode:
             FinalObj['totalNumInside'] = TotalNumInside
 
-        for nHairIdx, CurveObj in enumerate(AdjustedCurves):
+        for nHairIdx, CurveObj in enumerate(FinalCurves):
 
             # now we ready to write the points
             strandVerts = []
             CurvePoints = [p.co for p in CurveObj.data.splines[0].points]
             for PtIdx, Point in enumerate(CurvePoints):
-                vert = {}
+
                 p = TressFX_Float4()
                 p.x = Point[0]
 
@@ -859,7 +845,7 @@ class FTressFXExport(bpy.types.Operator):
                     p.w = 0
                 else:
                     p.w = 1.0
-                
+                vert = {}
                 vert['x'] = p.x
                 vert['y'] = p.y
                 vert['z'] = p.z
@@ -867,10 +853,10 @@ class FTressFXExport(bpy.types.Operator):
                 strandVerts.append(vert)
             # enumerate(CurvePoints):
             FinalObj['positions'].append(strandVerts)
-        # enumerate(AdjustedCurves) END
+        # enumerate(FinalCurves) END
         
         # get strand texture coords
-        for strandIndex, CurveObj in enumerate(AdjustedCurves):
+        for strandIndex, CurveObj in enumerate(FinalCurves):
             
             Points = [p.co for p in CurveObj.data.splines[0].points]
             rootPoint = Points[0]
@@ -905,9 +891,9 @@ class FTressFXExport(bpy.types.Operator):
             uvObj['x'] = UVCoord.x
             uvObj['y'] = UVCoord.y
             FinalObj['uvs'].append(uvObj)
-        #enumerate(AdjustedCurves) END
+        #enumerate(FinalCurves) END
 
-        boneData = self.getTFXBoneJSON(context, AdjustedCurves)
+        boneData = self.getTFXBoneJSON(context, FinalCurves)
         if boneData != 'ERROR':
             FinalObj['tfxBoneData'] = boneData
         else:
@@ -915,7 +901,7 @@ class FTressFXExport(bpy.types.Operator):
 
         with open(OutFilePath, "w") as TfxFile :
             TfxFile.write(json.dumps(FinalObj, indent=4))
-        return AdjustedCurves
+        return FinalCurves
 
     def getTFXBoneJSON(self, context, Finalcurves):
 
@@ -949,7 +935,6 @@ class FTressFXExport(bpy.types.Operator):
             StrandPoints = [p.co for p in CurveObj.data.splines[0].points]
             #TODO: root point may not always be the first point, especially if the curves were imported from a file
             RootPoint = StrandPoints[0]
-            SecondPoint = StrandPoints[1]
 
             IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)
             
