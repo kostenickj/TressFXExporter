@@ -25,6 +25,7 @@ if not thisdir in sys.path:
     sys.path.append(thisdir )
 
 import CurveSimplifier as simp
+import Curvesimplifier2 as simp2
 
 # Don't change the following maximum joints per vertex value. It must match the one in TressFX loader and simulation
 TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 4
@@ -56,48 +57,10 @@ class WeightJointIndexPair:
 	def __lt__(self, other):
 		return self.weight > other.weight
 
-def ConvertParticleSystemHairsToCurves(BaseMesh, ParticleSystemName):
-    """this function only converts the particle keys, not child particles"""
-    Curves = []
-
-    ParticleSystemObj = BaseMesh.particle_systems[ParticleSystemName]
-    hairs = ParticleSystemObj.particles
-
-    worldMatrix = BaseMesh.matrix_world
-    
-    for HairIndex, hair in enumerate(hairs):
-        
-        StrandVerts = []
-
-        for v in hair.hair_keys:
-            InWs = worldMatrix * v.co
-            StrandVerts.append(InWs)
-        
-        # create the Curve Datablock
-        CurveName = ParticleSystemName + '_' + str(HairIndex)
-        curveData = bpy.data.curves.new(CurveName, type='CURVE')
-        curveData.dimensions = '3D'
-        curveData.resolution_u = 12
-        polyline = curveData.splines.new('POLY')
-        polyline.points.add(len(StrandVerts) - 1) # theres already one point by default
-        
-        for i, vert in enumerate(StrandVerts):
-            polyline.points[i].co = (vert.x, vert.y, vert.z, 1)
-
-        # create Object
-        curveOB = bpy.data.objects.new(CurveName, curveData)
-        
-        # attach to scene and validate context
-        bpy.context.scene.objects.link(curveOB)
-        bpy.context.scene.objects.active = curveOB
-        curveOB.select = True
-        Curves.append(curveOB)
-    
-    return Curves
-
-def FindCurveIntersectionWithMesh(CurvePointsAsVectorsArray, MeshObj):
+def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
     """assumes points array goes from root -> tip"""
 
+    CurvePointsAsVectorsArray = [p.co for p in CurveObj.data.splines[0].points]
     Direction = (CurvePointsAsVectorsArray[1] - CurvePointsAsVectorsArray[0]).normalized()
     #TODO, iterate until i find how many points starting from first point are inside
     # and use direction between the last inside point, and the next point after
@@ -184,7 +147,7 @@ def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
         return CurveObj
 
 def CreateNewCurveFromPoints(StrandVerts, CurveName):
-    
+    """strandverts need to be array of mathutils.Vector"""
     curveData = bpy.data.curves.new(CurveName, type='CURVE')
     curveData.dimensions = '3D'
     curveData.resolution_u = 12
@@ -806,7 +769,6 @@ class FTressFXExport(bpy.types.Operator):
             #we need to subdivide the curve if it has less points than self.nNumVertsPerStrand
             CorrectCurve = RecursiveSubdivideCurveIfNeeded(context, CurveObj, self.nNumVertsPerStrand)
             
-            
             NewCurve = CorrectCurve
             #now resample to exactly nNumVertsPerStrand if needed
             if len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand:
@@ -816,17 +778,26 @@ class FTressFXExport(bpy.types.Operator):
                 if self.bDebugMode:
                     print('strand index ' + str(idx) + ' has ' + str(len(CurvePoints)) + ' points. Simplifying to ' + str(self.nNumVertsPerStrand) )
                 
-                Simplifier = simp.Simplifier(CurvePoints)
+                CorrectCurve = simp2.SimplifyCurve(context, CorrectCurve, self.nNumVertsPerStrand)
+                
+                #Simplifier = simp.Simplifier(CurvePoints)
                 # uses Visvalingam-Whyatt method
-                SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
-                SimplifiedCurveVectorList = [mathutils.Vector((vec[0],vec[1],vec[2])) for vec in SimplifiedCurve]
+                #SimplifiedCurve = Simplifier.simplify( number=self.nNumVertsPerStrand )
+                #SimplifiedCurveVectorList = [mathutils.Vector((vec[0],vec[1],vec[2])) for vec in SimplifiedCurve]
+  
+                #make sure first and last points were not changed, simplifier doesnt seem to be working correctly...
+                #TODO find out why
+                #SimplifiedCurveVectorList[0] = mathutils.Vector( (CurvePoints[0][0],CurvePoints[0][1],CurvePoints[0][2])  )
+                #last = len(CurvePoints) - 1
+                #SimplifiedCurveVectorList[self.nNumVertsPerStrand - 1] = mathutils.Vector( (CurvePoints[last][0],CurvePoints[last][1],CurvePoints[last][2] ) )
                 
                 #create new curve with exactly the right number of points
-                NewCurve = CreateNewCurveFromPoints(SimplifiedCurveVectorList, CorrectCurve.name + "_" + str(idx) )
+                NewCurve = CorrectCurve
+                #NewCurve = CreateNewCurveFromPoints(SimplifiedCurveVectorList, CorrectCurve.name + "_" + str(idx) )
                 #delete old curve
-                bpy.ops.object.select_all(action='DESELECT')
-                bpy.data.objects[CorrectCurve.name].select = True
-                bpy.ops.object.delete()
+                # bpy.ops.object.select_all(action='DESELECT')
+                # bpy.data.objects[CorrectCurve.name].select = True
+                # bpy.ops.object.delete()
 
             if len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand:
                 raise Exception('len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand')
@@ -867,7 +838,7 @@ class FTressFXExport(bpy.types.Operator):
 
             # now we ready to write the points
             strandVerts = []
-            #START HERE JAKE, get points from curveobj
+            CurvePoints = [p.co for p in CurveObj.data.splines[0].points]
             for PtIdx, Point in enumerate(CurvePoints):
                 vert = {}
                 p = TressFX_Float4()
@@ -899,8 +870,9 @@ class FTressFXExport(bpy.types.Operator):
         # enumerate(AdjustedCurves) END
         
         # get strand texture coords
-        for strandIndex, Points in enumerate(AdjustedCurves):
+        for strandIndex, CurveObj in enumerate(AdjustedCurves):
             
+            Points = [p.co for p in CurveObj.data.splines[0].points]
             rootPoint = Points[0]
             pVector = mathutils.Vector((rootPoint[0],rootPoint[1],rootPoint[2]))
 
@@ -972,14 +944,14 @@ class FTressFXExport(bpy.types.Operator):
                         AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
 
         TotalIntersects = 0
-        for RootIndex, StrandPoints in enumerate(Finalcurves):
+        for RootIndex, CurveObj in enumerate(Finalcurves):
 
+            StrandPoints = [p.co for p in CurveObj.data.splines[0].points]
             #TODO: root point may not always be the first point, especially if the curves were imported from a file
             RootPoint = StrandPoints[0]
             SecondPoint = StrandPoints[1]
 
-            pVectors = [ mathutils.Vector( (x[0], x[1], x[2] ) ) for x in StrandPoints ]
-            IntersectionPoint = FindCurveIntersectionWithMesh(pVectors, self.oBaseMesh)
+            IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)
             
             if IntersectionPoint is None:
                 if self.bDebugMode:
@@ -987,6 +959,7 @@ class FTressFXExport(bpy.types.Operator):
                 IntersectionPoint = RootPoint
             else:
                 TotalIntersects = TotalIntersects + 1
+            
             pointToUse = IntersectionPoint
 
             # #TODO: root points could be well inside the mesh,
@@ -1043,6 +1016,7 @@ class FTressFXExport(bpy.types.Operator):
                 if self.bDebugMode:
                     j['sourceVertIndex'] = boneweightmapObj.sourceVertIndex
                     j['rootIndex'] = RootIndex
+                    j['curveName'] = CurveObj.name
                 FinalObj['skinningData'].append( j )
         #enumerate(Finalcurves):
 
