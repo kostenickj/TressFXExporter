@@ -88,8 +88,6 @@ def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
     
     if((LastInsideIndex + 1 ) >= len(CurvePointsAsVectorsArray)):
         raise Exception('(LastInsideIndex + 1 ) == len(CurvePointsAsVectorsArray). This should never happen.')
-    
-   
 
     Direction = (CurvePointsAsVectorsArray[LastInsideIndex + 1] - CurvePointsAsVectorsArray[LastInsideIndex]).normalized()
 
@@ -99,7 +97,7 @@ def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
         VerticesIndices = Face.vertices
         p1, p2, p3 = [MeshObj.data.vertices[VerticesIndices[i]].co for i in range(3)]
 
-        # last arg is clip, which i think should be true but its not finding enough hits...
+        # last arg is clip to area of triangle, obviously we want that
         found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, True)
         if found is not None:
             return found
@@ -130,7 +128,8 @@ def IsPointInsideMesh(MeshObj, PointInObjectSpace):
 
 #this assumes all faces of the object are pointing outwards
 def IsPointInsideMesh2(obj, p, max_dist = 1.84467e+19):
-    """this assumes all faces of the object are pointing outwards. and the test point is already in object space so fix ur shit"""
+    """this assumes all faces of the object are pointing outwards. 
+    the test point is already in object space so fix ur shit"""
     bResult, point, normal, face = obj.closest_point_on_mesh(p, max_dist)
     p2 = point-p
     v = p2.dot(normal)
@@ -153,9 +152,8 @@ def FindIndexOfClosestPointOnMesh(vert, Obj):
     index = FindIndexOfClosestVector(vert,objVerts)
     return index
 
-# takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum
 def RecursiveSubdivideCurveIfNeeded(context, CurveObj, nDesiredVertNum):
-    
+    """takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum"""
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.context.scene.objects.active = CurveObj
 
@@ -191,7 +189,9 @@ def CreateNewCurveFromPoints(StrandVerts, CurveName):
     return curveOB
 
 def SeparateCurves(context):
-    """this runs out of memory or something on a ton of curves, don't use"""
+    """dont use this it crashes on huge numbers of cursves. use SeparateCurves2.
+        Im keeping this here so i dont forget
+    """
     active = context.active_object
     splines = active.data.splines
     bpy.ops.object.mode_set(mode='EDIT')
@@ -209,7 +209,6 @@ def SeparateCurves(context):
     bpy.ops.object.mode_set(mode='OBJECT')
 
 def SeparateCurves2(context):
-    
     """this is much faster than using the other separatecurves function"""
     Curves = []
     active = context.active_object
@@ -463,7 +462,7 @@ class FTressFXProps(bpy.types.PropertyGroup):
 
         FTressFXProps.bDebugMode = bpy.props.BoolProperty(
             name="Debug Mode", 
-            description="Adds extra fields to the file to aid in debugging",
+            description="Adds extra fields to the file and console to aid in debugging",
             default=False
             )
 
@@ -735,8 +734,8 @@ class FTressFXExport(bpy.types.Operator):
     Exports TressFX Files.
     Requirements:
     1. Base Mesh must be all triangles.
-    2. All curves and the base mesh must have rot and scale applied and origin be at the global origin (same space)
-    Assumes that the selected UV map on the base mesh is the one to use when generating UV's for the hairs.
+    2. All curves and the base mesh must have rot and scale applied.
+    3. Assumes that the selected UV map on the base mesh is the one to use when generating UV's for the hairs.
     '''    
 
     #NOTE bl_idname has to be all lowercase :(
@@ -839,11 +838,13 @@ class FTressFXExport(bpy.types.Operator):
         if self.bDebugMode:
             FinalObj['totalNumInside'] = TotalNumInside
 
-        for nHairIdx, CurveObj in enumerate(FinalCurves):
-
+        for nHairIdx, CurveObj in enumerate(FinalCurves):            
+            
+            CurvePoints = [p.co for p in CurveObj.data.splines[0].points]
+            #make sure they are in WS
+            CurvePoints = [ CurveObj.matrix_world * p for p in CurvePoints ]
             # now we ready to write the points
             strandVerts = []
-            CurvePoints = [p.co for p in CurveObj.data.splines[0].points]
             for PtIdx, Point in enumerate(CurvePoints):
 
                 p = TressFX_Float4()
@@ -878,8 +879,16 @@ class FTressFXExport(bpy.types.Operator):
         for strandIndex, CurveObj in enumerate(FinalCurves):
             
             Points = [p.co for p in CurveObj.data.splines[0].points]
+            
             rootPoint = Points[0]
-            pVector = mathutils.Vector((rootPoint[0],rootPoint[1],rootPoint[2]))
+            IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)            
+
+            if IntersectionPoint is None:
+                if self.bDebugMode:
+                    print('no intersection point found for strandIndex: ' + str(strandIndex) + ' using rootpoint instead to find uvs')
+                IntersectionPoint = CurveSpaceVectorToMeshSpace(CurveObj, rootPoint, self.oBaseMesh)
+
+            pVector = mathutils.Vector((IntersectionPoint[0],IntersectionPoint[1],IntersectionPoint[2]))
 
             #get closest point on base mesh
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
@@ -960,7 +969,7 @@ class FTressFXExport(bpy.types.Operator):
 
             if IntersectionPoint is None:
                 if self.bDebugMode:
-                    print('no intersection point found for Rootindex: ' + str(RootIndex) + ' using rootpoint instead')
+                    print('no intersection point found for Rootindex: ' + str(RootIndex) + ' using rootpoint instead for weights')
                 IntersectionPoint = CurveSpaceVectorToMeshSpace(CurveObj, RootPoint, self.oBaseMesh)
             else:
                 TotalIntersects = TotalIntersects + 1
