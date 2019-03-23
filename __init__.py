@@ -82,6 +82,7 @@ def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
             return found
     return None
 
+
 def MoveCurveVertSpaceToBaseMeshSpace(vec, baseMeshObj, CurveObj):
     """needs testing"""
     worldMatrix = CurveObj.matrix_world
@@ -131,6 +132,11 @@ def FindIndexOfClosestVector(Point, VecList):
         if VecDistance(VecList[i], Point) < VecDistance(Point, closest):
             closest = VecList[i]
             index = i
+    return index
+
+def FindIndexOfClosestPointOnMesh(vert, Obj):
+    objVerts = [v.co for v in Obj.data.vertices]
+    index = FindIndexOfClosestVector(vert,objVerts)
     return index
 
 # takes in a curve and subdivides it until it has numpoints >= nDesiredVertNum
@@ -936,23 +942,26 @@ class FTressFXExport(bpy.types.Operator):
             #TODO: root point may not always be the first point, especially if the curves were imported from a file
             RootPoint = StrandPoints[0]
 
-            IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)
-            
+            #IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)
+            IntersectionPoint = RootPoint
+
+            IntersectionPointInWs = CurveObj.matrix_world * IntersectionPoint
+            IntersectionPointInOS = self.oBaseMesh.matrix_world.inverted() * IntersectionPointInWs
+
             if IntersectionPoint is None:
                 if self.bDebugMode:
                     print('no intersection point found for Rootindex: ' + str(RootIndex) + ' using rootpoint instead')
                 IntersectionPoint = RootPoint
             else:
                 TotalIntersects = TotalIntersects + 1
-            
-            pointToUse = IntersectionPoint
 
             # #TODO: root points could be well inside the mesh,
             # # and closest_point_on_mesh would return wrong in this case.
             # # use raycast, first point as origin, second point as direction
             # # if it returns nothing then use the root point
 
-            pVector = mathutils.Vector((pointToUse[0],pointToUse[1],pointToUse[2]))
+            pVector = mathutils.Vector((IntersectionPointInOS[0],IntersectionPointInOS[1],IntersectionPointInOS[2]))
+
 	        # Find the closest point info
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
 
