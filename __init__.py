@@ -56,16 +56,42 @@ class WeightJointIndexPair:
 	def __lt__(self, other):
 		return self.weight > other.weight
 
+def CurveSpaceVectorToMeshSpace(CurveObj, Vert, MeshObj):
+    Point = Vert
+    WorldSpace = CurveObj.matrix_world * Point
+    InMeshSpace = MeshObj.matrix_world.inverted() * WorldSpace
+    return InMeshSpace
+
+def CurveSpaceVectorToMeshSpaceByIndex(CurveObj, CurveVertIndex, MeshObj):
+    Point = CurveObj.data.splines[0].points[CurveVertIndex].co
+    return CurveSpaceVectorToMeshSpace(CurveObj, Point, MeshObj)
+
 def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
-    """assumes points array goes from root -> tip"""
+    """assumes points array goes from root -> tip, returns point in mesh space"""
 
     CurvePointsAsVectorsArray = [p.co for p in CurveObj.data.splines[0].points]
 
-    #TODO, is this the corret subtraction order to get direction?
-    Direction = (CurvePointsAsVectorsArray[1] - CurvePointsAsVectorsArray[0]).normalized()
-    #TODO, iterate until i find how many points starting from first point are inside
+    #convert the points to same space as the mesh
+    CurvePointsAsVectorsArray = [ CurveSpaceVectorToMeshSpace(CurveObj, p, MeshObj ) for p in CurvePointsAsVectorsArray ]
+    
+    # find the last point on the curve that is inside the mesh
+    # iterate until i find how many points starting from first point are inside
     # and use direction between the last inside point, and the next point after
     # if only root point is inside mesh, always just use the second point
+    LastInsideIndex = 0
+    while(
+        IsPointInsideMesh(MeshObj, CurvePointsAsVectorsArray[LastInsideIndex].xyz) 
+        or
+        IsPointInsideMesh2(MeshObj, CurvePointsAsVectorsArray[LastInsideIndex].xyz)
+    ):
+        LastInsideIndex += 1
+    
+    if((LastInsideIndex + 1 ) >= len(CurvePointsAsVectorsArray)):
+        raise Exception('(LastInsideIndex + 1 ) == len(CurvePointsAsVectorsArray). This should never happen.')
+    
+   
+
+    Direction = (CurvePointsAsVectorsArray[LastInsideIndex + 1] - CurvePointsAsVectorsArray[LastInsideIndex]).normalized()
 
     for Face in MeshObj.data.polygons:
 
@@ -73,37 +99,25 @@ def FindCurveIntersectionWithMesh(CurveObj, MeshObj):
         VerticesIndices = Face.vertices
         p1, p2, p3 = [MeshObj.data.vertices[VerticesIndices[i]].co for i in range(3)]
 
-        #TODO, verts of curve may need to be put in same space as mesh...
-
         # last arg is clip, which i think should be true but its not finding enough hits...
         found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, True)
-        #found = mathutils.geometry.intersect_ray_tri(p1, p2, p3, Direction, Origin, False)
         if found is not None:
             return found
     return None
-
-
-def MoveCurveVertSpaceToBaseMeshSpace(vec, baseMeshObj, CurveObj):
-    """needs testing"""
-    worldMatrix = CurveObj.matrix_world
-    ConvertMatrix = baseMeshObj.convert_space( matrix = worldMatrix, from_space = 'WORLD', to_space = 'LOCAL' )
-    NewVert = ConvertMatrix * vec
-    return NewVert
-
 
 def GetNumPointsInsideMesh(MeshObj, CurveObj):
     
     num = 0
     for p in CurveObj.data.splines[0].points:
-        inside1 = IsPointInsideMesh(MeshObj, p.co.xyz )
-        inside2 = IsPointInsideMesh2(MeshObj, p.co.xyz  )
-        # if inside1 != inside2:
-        #     raise Exception('inside1 != inside2')
+        InMeshSpace = CurveSpaceVectorToMeshSpace(CurveObj, p.co, MeshObj)
+        inside1 = IsPointInsideMesh(MeshObj, InMeshSpace.xyz )
+        inside2 = IsPointInsideMesh2(MeshObj, InMeshSpace.xyz  )
         if inside1 or inside2:
             num = num + 1
     return num
 
 def IsPointInsideMesh(MeshObj, PointInObjectSpace):      
+    """point must already be in object space"""
     #direction is irellevant unless mesh is REALLY wierd shaped
     direction = mathutils.Vector((1,0,0))  
     epsilon = direction * 1e-6  
@@ -116,7 +130,7 @@ def IsPointInsideMesh(MeshObj, PointInObjectSpace):
 
 #this assumes all faces of the object are pointing outwards
 def IsPointInsideMesh2(obj, p, max_dist = 1.84467e+19):
-
+    """this assumes all faces of the object are pointing outwards. and the test point is already in object space so fix ur shit"""
     bResult, point, normal, face = obj.closest_point_on_mesh(p, max_dist)
     p2 = point-p
     v = p2.dot(normal)
@@ -794,7 +808,6 @@ class FTressFXExport(bpy.types.Operator):
                 raise Exception('len(NewCurve.data.splines[0].points) != self.nNumVertsPerStrand')
 
             #check to see if more than half the points are inside the mesh, if so, discard that strand
-            #TODO i think this isnt working right
             NumInside = GetNumPointsInsideMesh(self.oBaseMesh, NewCurve)
 
             if NumInside > CutoffPoint:
@@ -942,16 +955,13 @@ class FTressFXExport(bpy.types.Operator):
             #TODO: root point may not always be the first point, especially if the curves were imported from a file
             RootPoint = StrandPoints[0]
 
-            #IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)
-            IntersectionPoint = RootPoint
-
-            IntersectionPointInWs = CurveObj.matrix_world * IntersectionPoint
-            IntersectionPointInOS = self.oBaseMesh.matrix_world.inverted() * IntersectionPointInWs
+            # this will already be in mesh space if finds one
+            IntersectionPoint = FindCurveIntersectionWithMesh(CurveObj, self.oBaseMesh)            
 
             if IntersectionPoint is None:
                 if self.bDebugMode:
                     print('no intersection point found for Rootindex: ' + str(RootIndex) + ' using rootpoint instead')
-                IntersectionPoint = RootPoint
+                IntersectionPoint = CurveSpaceVectorToMeshSpace(CurveObj, RootPoint, self.oBaseMesh)
             else:
                 TotalIntersects = TotalIntersects + 1
 
@@ -960,7 +970,7 @@ class FTressFXExport(bpy.types.Operator):
             # # use raycast, first point as origin, second point as direction
             # # if it returns nothing then use the root point
 
-            pVector = mathutils.Vector((IntersectionPointInOS[0],IntersectionPointInOS[1],IntersectionPointInOS[2]))
+            pVector = mathutils.Vector((IntersectionPoint[0],IntersectionPoint[1],IntersectionPoint[2]))
 
 	        # Find the closest point info
             bResult, Location, Normal, FaceIndex = self.oBaseMesh.closest_point_on_mesh(pVector)
@@ -978,7 +988,8 @@ class FTressFXExport(bpy.types.Operator):
                 try:
                     weight = self.oBaseMesh.vertex_groups[Bone.name].weight(ClosestVert.index)                    
                 except:
-                    print('vertex index ' + str(ClosestVert.index) + ' is not weighted to ' + Bone.name )
+                    if self.bDebugMode:
+                        print('vertex index ' + str(ClosestVert.index) + ' is not weighted to ' + Bone.name )
                     pass
 
                 if weight > 0 :
