@@ -56,6 +56,29 @@ class WeightJointIndexPair:
 	def __lt__(self, other):
 		return self.weight > other.weight
 
+def GetBonesFromSettings(oMeshObj, ExportBones, eBoneExportMode):
+    
+    VertexGroupNames = [g.name for g in oMeshObj.vertex_groups]
+    AllBonesArray = []
+    Armature = oMeshObj.parent
+
+    ExportBonesNames = [j.sBoneName for j in ExportBones]
+
+    for bn in Armature.data.bones:
+        if bn.name in VertexGroupNames:
+            if eBoneExportMode == 'WHITELIST':
+                if bn.name in ExportBonesNames:
+                    if bn.use_deform:
+                        AllBonesArray.append(bn)
+            elif eBoneExportMode == 'BLACKLIST':
+                if bn.name not in ExportBonesNames:
+                    if bn.use_deform:
+                        AllBonesArray.append(bn)
+            else:
+                if bn.use_deform:
+                    AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
+    return AllBonesArray
+
 def CurveSpaceVectorToMeshSpace(CurveObj, Vert, MeshObj):
     Point = Vert
     WorldSpace = CurveObj.matrix_world * Point
@@ -705,7 +728,8 @@ class FTressFXPanel(bpy.types.Panel):
 
 class FTressFXCollisionExport(bpy.types.Operator):
     '''
-    TODO
+    Mesh must be triangulated and weighted.
+    It will use the bone mode selected above
     '''    
 
     #NOTE bl_idname has to be all lowercase :(
@@ -714,19 +738,110 @@ class FTressFXCollisionExport(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-
-        #TODO: check if object is bound yet
         return context.active_object is not None
+
+    def SaveTfxMeshTextFile(self, context):
+
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oColMesh.name)  + ".tfxmesh"
+        print(OutFilePath)
+        AllBonesArray = GetBonesFromSettings(self.oColMesh, self.ExportBones, self.eBoneExportMode)
+        BonesArray_WithWeightsOnly = []
+
+        NumVerts = len(self.oColMesh.data.vertices)
+        
+        # each entry is as array of 4 BoneweightmapObj's
+        VertWeightData = []
+        for idx, Vert in enumerate(self.oColMesh.data.vertices):
+
+            #get weights
+            VertWeights = []
+
+            for Bone in AllBonesArray:
+                weight = -1
+                
+                try:
+                    weight = self.oColMesh.vertex_groups[Bone.name].weight(Vert.index)                    
+                except:
+                    if self.bDebugMode:
+                        print('vertex index ' + str(Vert.index) + ' is not weighted to ' + Bone.name )
+                    pass
+
+                if weight > 0 :
+                    boneweightmapObj = BoneweightmapObj()
+                    boneweightmapObj.boneName = Bone.name
+                    boneweightmapObj.weight = weight
+                    boneweightmapObj.sourceVertIndex = Vert.index
+                    VertWeights.append( boneweightmapObj )
+                    if Bone.name not in BonesArray_WithWeightsOnly:
+                        BonesArray_WithWeightsOnly.append(Bone.name)
+            
+            VertWeights.sort()
+
+            if len(VertWeights) < 1:
+                self.report({'ERROR'}, "No weights found for at least one vertex! Make sure to whitelist or blacklist bones! Or use all with weight.")
+                return 'ERROR'
+            
+            #make sure we have at least 4
+            while len(VertWeights) < TRESSFX_MAX_INFLUENTIAL_BONE_COUNT :
+                VertWeights.append(BoneweightmapObj())
+
+            VertWeightData.append(VertWeights)
+
+        for idx, Vert in enumerate(self.oColMesh.data.vertices):
+            print('here')
 
 
     def execute(self, context):
-        print("todo")
-        print("python version:")
-        print(sys.version_info)
-        self.report({'WARNING'}, "Not yet implemented!")
-        return {'CANCELLED'}
-        # oTargetObject = context.active_object
-        # return {'FINISHED'}      
+        
+        oTargetObject = context.active_object
+        oTFXProps = oTargetObject.TressFXProps
+
+        #retreive stuff
+        print("SETTINGS:")
+
+        self.oColMesh = None
+
+        self.bDebugMode = oTFXProps.bDebugMode
+        print('     bdebugMode: ' + str(self.bDebugMode))
+
+        if oTFXProps.sCollisionMesh and oTFXProps.sCollisionMesh in bpy.data.objects:
+            self.oColMesh = bpy.data.objects[oTFXProps.sCollisionMesh]
+            print('     Collision Mesh: ' + self.oColMesh.name)
+        else:
+            self.report({'ERROR'}, "CollisionMesh mesh not found!")
+            return {'CANCELLED'}
+
+        self.eBoneExportMode = oTFXProps.eBoneExportMode
+        print('     eBoneExportMode: ' + self.eBoneExportMode)
+        self.ExportBones = oTFXProps.ExportBones
+        
+        if oTFXProps.eBoneExportMode != 'ALL_WITH_WEIGHT':
+            if self.ExportBones is None or (self.ExportBones is not None and len(self.ExportBones) < 1):
+                self.report({'ERROR'}, "Export mode was either BLACKLIST or WHITELIST, but no bones were found. Aborting.")
+                return {'CANCELLED'}
+
+        print('     Selected Bones: ')
+        for b in self.ExportBones:
+            print('         ' + b.sBoneName)
+
+        print('     eBoneExportMode: ' +  self.eBoneExportMode)
+        
+        self.sOutputDir = oTFXProps.sOutputDir
+        print('     sOutputDir: ' + str(self.sOutputDir))
+        self.sOutputName = oTFXProps.sOutputName
+        print('     sOutputName: ' + str(self.sOutputName))
+
+        if len(self.sOutputDir) < 1:
+            self.report({'ERROR'}, "Output directory not set. Aborting.")
+            return {'CANCELLED'}
+
+        if self.oColMesh.parent.type != 'ARMATURE':
+            self.report({'ERROR'}, "No armature found on collision mesh. Aborting")
+            return {'CANCELLED'}
+
+        self.SaveTfxMeshTextFile(context)
+
+        return {'FINISHED'}      
 
 
 class FTressFXExport(bpy.types.Operator):
@@ -934,34 +1049,17 @@ class FTressFXExport(bpy.types.Operator):
     def getTFXBoneJSON(self, context, Finalcurves):
 
         VertexGroupNames = [g.name for g in self.oBaseMesh.vertex_groups]
-        AllBonesArray = [] # aka used bones
+        AllBonesArray = GetBonesFromSettings(self.oBaseMesh, self.ExportBones, self.eBoneExportMode)
         BonesArray_WithWeightsOnly = []
         FinalObj = {}
         FinalObj['skinningData'] = []
-
-        Armature = self.oBaseMesh.parent
-
-        ExportBonesNames = [j.sBoneName for j in self.ExportBones]
-
-        for bn in Armature.data.bones:
-            if bn.name in VertexGroupNames:
-                if self.eBoneExportMode == 'WHITELIST':
-                    if bn.name in ExportBonesNames:
-                        if bn.use_deform:
-                            AllBonesArray.append(bn)
-                elif self.eBoneExportMode == 'BLACKLIST':
-                    if bn.name not in ExportBonesNames:
-                        if bn.use_deform:
-                            AllBonesArray.append(bn)
-                else:
-                    if bn.use_deform:
-                        AllBonesArray.append(bn) # must be ALL_WITH_WEIGHT
 
         TotalIntersects = 0
         for RootIndex, CurveObj in enumerate(Finalcurves):
 
             StrandPoints = [p.co for p in CurveObj.data.splines[0].points]
-            #TODO: root point may not always be the first point, especially if the curves were imported from a file
+            #TODO: root point may not always be the first point, especially if the curves were imported from a file\
+            # how to determine in that case?
             RootPoint = StrandPoints[0]
 
             # this will already be in mesh space if finds one
@@ -973,11 +1071,6 @@ class FTressFXExport(bpy.types.Operator):
                 IntersectionPoint = CurveSpaceVectorToMeshSpace(CurveObj, RootPoint, self.oBaseMesh)
             else:
                 TotalIntersects = TotalIntersects + 1
-
-            # #TODO: root points could be well inside the mesh,
-            # # and closest_point_on_mesh would return wrong in this case.
-            # # use raycast, first point as origin, second point as direction
-            # # if it returns nothing then use the root point
 
             pVector = mathutils.Vector((IntersectionPoint[0],IntersectionPoint[1],IntersectionPoint[2]))
 
