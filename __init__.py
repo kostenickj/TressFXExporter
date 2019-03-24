@@ -44,6 +44,7 @@ class BoneweightmapObj:
     weight = 0.0
     boneName= ""
     sourceVertIndex = -1
+    jointIndex = -1
     # For sorting 
     def __lt__(self, other):
         return self.weight > other.weight
@@ -252,25 +253,11 @@ def SeparateCurves2(context):
 
     return Curves
 
-def OnTressFXBaseMeshChange(self, context):
-    #NOTE: self is FTressFXProps instance
-    print("Base Mesh Change")
-
-    if self.sBaseMesh in bpy.data.objects:
-
-        oBaseMesh = bpy.data.objects[self.sBaseMesh]
-        if oBaseMesh.type != "MESH":
-            self.sBaseMesh = ""
-            print("Invalid Mesh selected.")
-        else:
-            print("new mesh set: " + oBaseMesh.name)
-
 def OnBoneSelect(self, context):
     #NOTE: self is FTressFXProps instance
     boneName = self.dummyBoneStr
-    if self.sBaseMesh and self.sBaseMesh in bpy.data.objects:
-        oBaseMesh = bpy.data.objects[self.sBaseMesh]
-        armature = oBaseMesh.parent
+    if self.oBaseMesh:
+        armature = self.oBaseMesh.parent
         if boneName in armature.data.bones:
             item = self.ExportBones.add()
             item.sBoneName = boneName
@@ -278,18 +265,6 @@ def OnBoneSelect(self, context):
     if self.dummyBoneStr != '':
         self.dummyBoneStr = ''
 
-def OnTressFXCollisionMeshChange(self, context):
-    #NOTE: self is FTressFXProps instance
-    print("Collision Mesh Change")
-
-    if self.sCollisionMesh in bpy.data.objects:
-
-        oCollisionMesh = bpy.data.objects[self.sCollisionMesh]
-        if oCollisionMesh.type != "MESH":
-            self.sCollisionMesh = ""
-            print("Invalid collision Mesh selected.")
-        else:
-            print("new collision mesh set: " + oCollisionMesh.name)
 
 '''      
 # ----------------------------------------
@@ -427,21 +402,33 @@ class FTressFXBoneProps(bpy.types.PropertyGroup):
             description="Bone Name"
         )
    
+def MeshPoll(self, obj):
+    return obj.type == 'MESH'
+
 class FTressFXProps(bpy.types.PropertyGroup):
     
     @classmethod
     def register(FTressFXProps):
 
-        FTressFXProps.sBaseMesh = bpy.props.StringProperty(
-            name="Base Mesh", 
+        # FTressFXProps.sBaseMesh = bpy.props.StringProperty(
+        #     name="Base Mesh", 
+        #     description="The mesh the hairs are attached and weighted to",
+        #     update=OnTressFXBaseMeshChange
+        #     )
+
+        
+        FTressFXProps.oBaseMesh = bpy.props.PointerProperty(
+            name="Object Base Mesh", 
             description="The mesh the hairs are attached and weighted to",
-            update=OnTressFXBaseMeshChange
+            type=bpy.types.Object,
+            poll=MeshPoll
             )
 
-        FTressFXProps.sCollisionMesh = bpy.props.StringProperty(
+        FTressFXProps.oCollisionMesh = bpy.props.PointerProperty(
             name="Collision Mesh", 
             description="Collision Mesh for SDF",
-            update=OnTressFXCollisionMeshChange
+            type=bpy.types.Object,
+            poll=MeshPoll
             )
 
         FTressFXProps.eExportType = bpy.props.EnumProperty(
@@ -581,7 +568,9 @@ class FTressFXPanel(bpy.types.Panel):
             LeftCol = BaseMeshSplit.column()
             LeftCol.label(text="Base Mesh: ")
             RightCol = BaseMeshSplit.column()
-            RightCol.prop_search(oTFXProps, "sBaseMesh",  context.scene, "objects", text="")
+
+
+            RightCol.prop_search(oTFXProps, "oBaseMesh",  context.scene, "objects", text="")
 
             #num verts selection
             NumVertsPerStrandRow = MainBox.row()
@@ -716,7 +705,7 @@ class FTressFXPanel(bpy.types.Panel):
             LeftCol = ColMeshSplit.column()
             LeftCol.label(text="Collision Mesh: ")
             RightCol = ColMeshSplit.column()
-            RightCol.prop_search(oTFXProps, "sCollisionMesh",  context.scene, "objects", text="")
+            RightCol.prop_search(oTFXProps, "oCollisionMesh",  context.scene, "objects", text="")
             CollisionBox.row()
 
             ColMeshExportRow = CollisionBox.row()
@@ -742,8 +731,6 @@ class FTressFXCollisionExport(bpy.types.Operator):
 
     def SaveTfxMeshTextFile(self, context):
 
-        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oColMesh.name)  + ".tfxmesh"
-        print(OutFilePath)
         AllBonesArray = GetBonesFromSettings(self.oColMesh, self.ExportBones, self.eBoneExportMode)
         BonesArray_WithWeightsOnly = []
 
@@ -787,8 +774,43 @@ class FTressFXCollisionExport(bpy.types.Operator):
 
             VertWeightData.append(VertWeights)
 
+        OutFilePath = self.sOutputDir + (self.sOutputName if len(self.sOutputName) > 0 else self.oColMesh.name)  + ".tfxmesh"
+        print(OutFilePath)
+        TFXMeshFile = open(OutFilePath, "w")
+        TFXMeshFile.write("# TressFX collision mesh exported by TressFX Exporter for Blender. Written by Jacob Kostenick\n")
+        TFXMeshFile.write("numOfBones %g\n" % (len(BonesArray_WithWeightsOnly)))
+
+        TFXMeshFile.write("# bone index, bone name\n")
+        for i in range(len(BonesArray_WithWeightsOnly)):
+            TFXMeshFile.write("%d %s\n" % (i, BonesArray_WithWeightsOnly[i]))
+
+	    # write vertex positions and skinning data
+        TFXMeshFile.write("numOfVertices %g\n" % (NumVerts))
+        TFXMeshFile.write("# vertex index, vertex position x, y, z, normal x, y, z, joint index 0, joint index 1, joint index 2, joint index 3, weight 0, weight 1, weight 2, weight 3\n")
         for idx, Vert in enumerate(self.oColMesh.data.vertices):
-            print('here')
+            Weights = VertWeightData[idx]
+            for W in Weights:
+                if W.weight <= 0:
+                    W.jointIndex = 0
+                else:
+                    W.jointIndex = BonesArray_WithWeightsOnly.index(W.boneName)
+            
+            Normal = Vert.normal
+            Pos = Vert.co
+            VertIndex = Vert.index
+            TFXMeshFile.write("%g %g %g %g %g %g %g %g %g %g %g %g %g %g %g\n" % (VertIndex, Pos.x, Pos.y, Pos.z, Normal.x, Normal.y, Normal.z, Weights[0].jointIndex, Weights[1].jointIndex, Weights[2].jointIndex, Weights[3].jointIndex,
+                                                            Weights[0].weight, Weights[1].weight, Weights[2].weight, Weights[3].weight))
+        
+        TFXMeshFile.write("numOfTriangles %g\n" % (len(self.oColMesh.data.polygons)))    
+        TFXMeshFile.write("# triangle index, vertex index 0, vertex index 1, vertex index 2\n")
+        for idx, FaceObj in enumerate(self.oColMesh.data.polygons):
+            FaceVertices = [self.oColMesh.data.vertices[i] for i in FaceObj.vertices]
+            if len(FaceVertices) != 3:
+                TFXMeshFile.close()
+                raise Exception('Mesh must be triangulated!')
+            TFXMeshFile.write("%g %d %d %d\n" % (FaceObj.index, FaceVertices[0].index, FaceVertices[1].index, FaceVertices[2].index))
+        
+        TFXMeshFile.close()
 
 
     def execute(self, context):
@@ -804,8 +826,8 @@ class FTressFXCollisionExport(bpy.types.Operator):
         self.bDebugMode = oTFXProps.bDebugMode
         print('     bdebugMode: ' + str(self.bDebugMode))
 
-        if oTFXProps.sCollisionMesh and oTFXProps.sCollisionMesh in bpy.data.objects:
-            self.oColMesh = bpy.data.objects[oTFXProps.sCollisionMesh]
+        if oTFXProps.oCollisionMesh:
+            self.oColMesh = oTFXProps.oCollisionMesh
             print('     Collision Mesh: ' + self.oColMesh.name)
         else:
             self.report({'ERROR'}, "CollisionMesh mesh not found!")
@@ -1146,8 +1168,8 @@ class FTressFXExport(bpy.types.Operator):
         self.bDebugMode = oTFXProps.bDebugMode
         print('     bdebugMode: ' + str(self.bDebugMode))
 
-        if oTFXProps.sBaseMesh and oTFXProps.sBaseMesh in bpy.data.objects:
-            self.oBaseMesh = bpy.data.objects[oTFXProps.sBaseMesh]
+        if oTFXProps.oBaseMesh:
+            self.oBaseMesh = oTFXProps.oBaseMesh
             print('     Base Mesh: ' + self.oBaseMesh.name)
         else:
             self.report({'ERROR'}, "Base mesh not found!")
