@@ -3,9 +3,9 @@ bl_info = {
     "author": "Kostenick, Jacob",
     "version": (0, 0, 1),
     "blender": (2, 79, 0),
-    "description": "YEET",
+    "description": "todo",
     "warning": "",
-    "wiki_url": "YOLO",
+    "wiki_url": "todo",
     "category": "Animation",
 }
 
