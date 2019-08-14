@@ -25,7 +25,7 @@ selected_mesh_shape_name = ''
 tressfx_exporter_version = '4.0'
 
 # Don't change the following maximum joints per vertex value. It must match the one in TressFX loader and simulation
-TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 4
+TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 16
 
 # Following is a script to unload and load this plugin. It may be useful to reload the plugin quickly during the development. 
 # import maya.cmds as cmds
@@ -183,7 +183,7 @@ def UI():
         cmds.deleteUI("TressFXExporterUI") 
 
     window_width = 255
-    window_height = 320
+    window_height = 400
     
     windowTitle = 'TressFX Hair/Fur'
     window = cmds.window("TressFXExporterUI", title = windowTitle, w=window_width, h = window_height, mnb=False, sizeable=False)
@@ -209,23 +209,23 @@ def UI():
     cmds.menuItem(label='64')
 
     cmds.text(label='Minimum curve length:', align='left')
-    cmds.floatField("minCurveLength", minValue=0, value=0, w=70)
+    cmds.floatField("minCurveLength", minValue=0, value=0.001, w=70)
     cmds.setParent('..')
     cmds.separator(style='none',h=10)
     
     cmds.columnLayout()
     cmds.checkBox("bothEndsImmovable", label='Both ends immovable')
     cmds.separator (style='none', width=10)
-    cmds.checkBox("InvertZ", label='Invert Z-axis of Hairs', value = False)
-    cmds.checkBox("InvertYForUVs", label='Invert Y-axis of UV coordinates', value = False)
+    cmds.checkBox("InvertZ", label='Invert Z-axis of Hairs (unreal need this)', value = True)
+    cmds.checkBox("InvertYForUVs", label='Invert Y-axis of UV coordinates (unreal need this)', value = True)
     cmds.checkBox("randomStrandCheckBox", label='Randomize strands for LOD', value = True)
     
     cmds.separator(style='none',h=10)
     
-    cmds.checkBox("exportHairCheckBox", label='Export hair data (*.tfx)', value = True)
+    cmds.checkBox("exportHairCheckBox", label='Export hair data (*.tfx)', value = False)
     cmds.checkBox("exportSkinCheckBox", label='Export skin data (*.tfxskin)', value = False)
     cmds.checkBox("exportBoneCheckBox", label='Export bone data (*.tfxbone)', value = False)
-    cmds.checkBox("exportJsonCheckBox", label='Export Json data (*.tfxjson)', value = False)
+    cmds.checkBox("exportJsonCheckBox", label='Export Json data (*.tfxjson)', value = True)
     
     cmds.separator(style='none',h=15)
     
@@ -438,12 +438,13 @@ def DoExport(*args):
         rootPositions, DicTfx = SaveTFXBinaryFile(filepath[0], curves, meshShapedagPath, 1)
         DicBone = SaveTFXBoneBinaryFile(filepath[0], selected_mesh_shape_name, meshShapedagPath, rootPositions, 1)
 
-        MergeDic = dict(DicTfx, **DicBone)
+        if DicBone is not None:
+            DicTfx = dict(DicTfx, **DicBone)
         #f = Internalopen(filepath[0], "wb", 1)
         #f.write(MergeDic)
         #f.close()
         f = open(filepath[0], "wb")
-        f.write(json.dumps(MergeDic))
+        f.write(json.dumps(DicTfx))
         f.close()
 
 
@@ -742,6 +743,7 @@ def SaveTFXBoneBinaryFile(filepath, selected_mesh_shape_name, meshShapedagPath, 
 
     # collect bone weights for all vertices in the mesh
     index = 0
+    maxWeightCount = 0
 
     while geoIter.isDone() == False:
         weights = OpenMaya.MDoubleArray()
@@ -749,23 +751,31 @@ def SaveTFXBoneBinaryFile(filepath, selected_mesh_shape_name, meshShapedagPath, 
         
         weightJointIndexPairs = []
         
-        for i in range(len(weights)):
+        for i in range(len(weights)): # all bones, even not weighted
             pair = WeightJointIndexPair()
             pair.weight = weights[i]
             pair.joint_index = i 
             weightJointIndexPairs.append(pair)
     
-        weightJointIndexPairs.sort()
+        weightJointIndexPairs.sort() #sort with weight, lower weight will fall behind
+
+        # if len(weightJointIndexPairs) > TRESSFX_MAX_INFLUENTIAL_BONE_COUNT:
+        #     sys.stderr.write("bone weight count excced two important bones: "+influenceObjectsNames[weightJointIndexPairs[0].joint_index]+","+influenceObjectsNames[weightJointIndexPairs[1].joint_index])
+        #     maxWeightCount = max(maxWeightCount, len(weightJointIndexPairs))
         
         a = 0
 
-        for j in range(min(len(weightJointIndexPairs), TRESSFX_MAX_INFLUENTIAL_BONE_COUNT )):
+        weightJointIndexPairsLen = min(TRESSFX_MAX_INFLUENTIAL_BONE_COUNT, len(weightJointIndexPairs))
+        for j in range(weightJointIndexPairsLen):
             weightArray[index*TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  + a] = weightJointIndexPairs[j].weight
             jointIndexArray[index*TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  + a] = weightJointIndexPairs[j].joint_index
             a += 1
 
         index += 1
         geoIter.next()
+
+    if maxWeightCount > TRESSFX_MAX_INFLUENTIAL_BONE_COUNT:
+        raise Exception()
     
     #------------------------
     # Save the tfxbone file.
@@ -791,6 +801,14 @@ def SaveTFXBoneBinaryFile(filepath, selected_mesh_shape_name, meshShapedagPath, 
     # Number of Strands
     f.write(ctypes.c_int(len(triangleIdForStrandsList)))
 
+    def removeBoneNameAscii(boneName):
+        # work for unreal
+        while 'FBXASC' in boneName:
+            boneName = boneName.replace('FBXASC032','-')
+            boneName = boneName.replace('FBXASC040','(')
+            boneName = boneName.replace('FBXASC041',')')
+        return boneName
+
     # Json Modify
     FDict = {}
     if Use_Json:
@@ -798,7 +816,7 @@ def SaveTFXBoneBinaryFile(filepath, selected_mesh_shape_name, meshShapedagPath, 
         FDict["tfxBoneData"]["bonesList"] = []
         FDict["tfxBoneData"]["numGuideStrands"] = len(triangleIdForStrandsList)
         for i in range(len(influenceObjectsNames)):
-            FDict["tfxBoneData"]["bonesList"].append(influenceObjectsNames[i])
+            FDict["tfxBoneData"]["bonesList"].append(removeBoneNameAscii(influenceObjectsNames[i]))
 
             #print influenceObjectsNames
     for i in range(len(triangleIdForStrandsList)):
@@ -813,84 +831,36 @@ def SaveTFXBoneBinaryFile(filepath, selected_mesh_shape_name, meshShapedagPath, 
 
         #print weightJointIndexPairs[0].joint_index
         #print weightJointIndexPairs[0].weight
-        print influenceObjectsNames[weightJointIndexPairs[0].joint_index]
-        print weightJointIndexPairs[0].weight
+        #print influenceObjectsNames[weightJointIndexPairs[0].joint_index]
+        #print weightJointIndexPairs[0].weight
 
         # Index, the rest should be self explanatory.
         def getBoneAndWeight(BoneIndex, WeightIndex):
             if Use_Json:
-                FDict["tfxBoneData"]["skinningData"].append(
-                    {
-                        "boneName" : influenceObjectsNames[weightJointIndexPairs[BoneIndex].joint_index],
-                        "weight": weightJointIndexPairs[WeightIndex].weight
-                    }
-                )
+                if BoneIndex < len(weightJointIndexPairs) and weightJointIndexPairs[BoneIndex].joint_index < len(influenceObjectsNames):
+                    FDict["tfxBoneData"]["skinningData"].append(
+                        {
+                            "boneName" : removeBoneNameAscii(influenceObjectsNames[weightJointIndexPairs[BoneIndex].joint_index]),
+                            "weight": weightJointIndexPairs[WeightIndex].weight
+                        }
+                    )
+                else:
+                    FDict["tfxBoneData"]["skinningData"].append(
+                        {
+                            "boneName" : "",
+                            "weight": 0
+                        }
+                    )
 
         if not Use_Json:
             f.write(ctypes.c_int(i))
-            f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-            f.write(ctypes.c_float(weightJointIndexPairs[0].weight))
-            if weightJointIndexPairs.__len__() > 1:
-                f.write(ctypes.c_int(weightJointIndexPairs[1].joint_index))
-                f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-            else:
-                f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-                f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-            if weightJointIndexPairs.__len__() > 2:
-                f.write(ctypes.c_int(weightJointIndexPairs[2].joint_index))
-                f.write(ctypes.c_float(weightJointIndexPairs[2].weight))
-            else:
-                f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-                f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-            if weightJointIndexPairs.__len__() > 3:
-                f.write(ctypes.c_int(weightJointIndexPairs[3].joint_index))
-                # f.write(ctypes.c_float(weightJointIndexPairs[3].weight))
-                f.write(ctypes.c_float(
-                    1 - weightJointIndexPairs[0].weight - weightJointIndexPairs[1].weight - weightJointIndexPairs[
-                        2].weight))
-            else:
-                f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-                f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-        else:
-            getBoneAndWeight(0, 0)
-            if weightJointIndexPairs.__len__() > 1:
-                getBoneAndWeight(1, 1)
-            else:
-                getBoneAndWeight(0, 1)
-            if weightJointIndexPairs.__len__() > 2:
-                getBoneAndWeight(2, 2)
-            else:
-                getBoneAndWeight(0, 1)
-            if weightJointIndexPairs.__len__() > 3:
-                FDict["tfxBoneData"]["skinningData"].append(
-                    {
-                        "boneName" : influenceObjectsNames[weightJointIndexPairs[3].joint_index],
-                        "weight": 1 - weightJointIndexPairs[0].weight - weightJointIndexPairs[1].weight - weightJointIndexPairs[2].weight
-                    }
-                )
-            else:
-                getBoneAndWeight(0, 1)
-        '''
-        if weightJointIndexPairs.__len__()>1:
-            f.write(ctypes.c_int(weightJointIndexPairs[1].joint_index))
-            f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-        else:
-            f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-            f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-        if weightJointIndexPairs.__len__()>2:
-            f.write(ctypes.c_int(weightJointIndexPairs[2].joint_index))
-            f.write(ctypes.c_float(weightJointIndexPairs[2].weight))
-        else:
-            f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-            f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-        if weightJointIndexPairs.__len__()>3:
-            f.write(ctypes.c_int(weightJointIndexPairs[3].joint_index))
-            #f.write(ctypes.c_float(weightJointIndexPairs[3].weight))
-            f.write(ctypes.c_float(1-weightJointIndexPairs[0].weight-weightJointIndexPairs[1].weight-weightJointIndexPairs[2].weight))
-        else:
-            f.write(ctypes.c_int(weightJointIndexPairs[0].joint_index))
-            f.write(ctypes.c_float(weightJointIndexPairs[1].weight))
-        '''
+            for i in range(0, len(weightJointIndexPairs)):
+                f.write(ctypes.c_int(weightJointIndexPairs[i].joint_index))
+                f.write(ctypes.c_float(weightJointIndexPairs[i].weight))
+        else: # for json
+            for i in range(0, TRESSFX_MAX_INFLUENTIAL_BONE_COUNT):
+                getBoneAndWeight(i, i)
+
 
         progressBar.Increment()
     # Json Modify
@@ -1363,7 +1333,7 @@ def ExportMesh(filepath, meshShapedagPath):
             pair.joint_index = i 
             weightJointIndexPairs.append(pair)
     
-        weightJointIndexPairs.sort()
+        weightJointIndexPairs.sort() #all zero weight will be sorted behind
         
         a = 0
 
