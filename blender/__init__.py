@@ -27,7 +27,7 @@ if not thisdir in sys.path:
 import Curvesimplifier2 as simp2
 
 # Don't change the following maximum joints per vertex value. It must match the one in TressFX loader and simulation
-TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 4
+TRESSFX_MAX_INFLUENTIAL_BONE_COUNT  = 16
 TRESSFX_SIM_THREAD_GROUP_SIZE = 64
 
 class TressFX_Float4(ctypes.Structure):
@@ -461,7 +461,8 @@ class FTressFXProps(bpy.types.PropertyGroup):
             description='Minimum curve length is to filter out hair shorter than the input length. In some case, it is hard to get rid of short hair using modeling tool. This option will be handy in that case. If it is set to zero, then there will be no filtering. ',
             min = 0,
             soft_min = 0,
-            precision = 6
+            precision = 6,
+            default = 0.001
             )
 
         FTressFXProps.bBothEndsImmovable = bpy.props.BoolProperty(
@@ -478,14 +479,14 @@ class FTressFXProps(bpy.types.PropertyGroup):
 
         FTressFXProps.bInvertZAxis = bpy.props.BoolProperty(
             name="Invert Z-axis of Hairs", 
-            description="inverts the Z component of hair vertices. This may be useful to deal with some engines using left-handed coordinate system",
-            default=False
+            description="inverts the Z component of hair vertices (unreal needs this).",
+            default=True
             )
         
         FTressFXProps.bInvertYAxisUV = bpy.props.BoolProperty(
             name="Invert Y-axis of UV coordinates", 
-            description="inverts Y component of UV coordinates",
-            default=False
+            description="inverts Y component of UV coordinates (unreal needs this)",
+            default=True
             )
 
         FTressFXProps.bRandomizeStrandsForLOD = bpy.props.BoolProperty(
@@ -1130,7 +1131,7 @@ class FTressFXExport(bpy.types.Operator):
             if len(ClosestVertWeights) < 1:
                 self.report({'ERROR'}, "No weights found for at least one root position! Make sure to whitelist or blacklist bones! Or use all with weight.")
                 return 'ERROR'
-            #make sure we have at least 4
+            #make sure we have at least TRESSFX_MAX_INFLUENTIAL_BONE_COUNT
             while len(ClosestVertWeights) < TRESSFX_MAX_INFLUENTIAL_BONE_COUNT :
                 ClosestVertWeights.append(BoneweightmapObj())
 
